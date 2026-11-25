@@ -60,3 +60,7 @@ review-aurelio.*
 .spikes/
 # OpenTerminal/: vendored third-party checkout with its own .git, reference only.
 OpenTerminal/
+
+# Graphify knowledge tooling artifacts
+graphify-out/
+.knowledge/

@@ -28,7 +28,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "tests_trading"]
 # Make the `app` package importable when running pytest from backend/.
 pythonpath = ["."]
 asyncio_mode = "auto"

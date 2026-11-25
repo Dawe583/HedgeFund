@@ -215,6 +215,42 @@ class BacktestRun(Base):
 
     model: Mapped[ModelVersion | None] = relationship(back_populates="runs")
 
+class BacktestValidation(Base):
+    """Provenance row for one validation-gate verdict on one backtest.
+
+    Written by the research CLI (trading/research.py) — every number the
+    verdict stands on travels with it: seed, data range and source, the
+    three statistical checks and the gate thresholds they were held to.
+    """
+
+    __tablename__ = "backtest_validations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    bot: Mapped[str] = mapped_column(String(32))
+    symbol: Mapped[str] = mapped_column(String(32))
+    timeframe: Mapped[str] = mapped_column(String(8))
+    strategy: Mapped[str] = mapped_column(String(64))
+    params_json: Mapped[str] = mapped_column(String(2048), default="{}")
+    seed: Mapped[int] = mapped_column(Integer)
+    data_source: Mapped[str] = mapped_column(String(32))  # binance | synthetic | ...
+    data_rows: Mapped[int] = mapped_column(Integer)
+    data_start: Mapped[str] = mapped_column(String(40))
+    data_end: Mapped[str] = mapped_column(String(40))
+    trades_n: Mapped[int] = mapped_column(Integer)
+    min_trades_required: Mapped[int] = mapped_column(Integer, default=30)
+    permutation_p: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sharpe_actual: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sharpe_ci_lo: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sharpe_ci_hi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prob_positive: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wf_positive_folds: Mapped[int] = mapped_column(Integer, default=0)
+    wf_total_folds: Mapped[int] = mapped_column(Integer, default=0)
+    verdict: Mapped[str] = mapped_column(String(16))  # validated | rejected | insufficient_data
+    reasons_json: Mapped[str] = mapped_column(String(2048), default="[]")
+    validation_json: Mapped[str] = mapped_column(Text, default="{}")
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("backtest_runs.id"), nullable=True)
+
 
 def make_engine(url: str | None = None):
     settings = get_settings()

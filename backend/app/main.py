@@ -35,6 +35,7 @@ from app.routers import (
     settings,
     snapshots,
     survey,
+    trading,
     transactions,
     transfers,
     watchlist,
@@ -113,6 +114,7 @@ app.include_router(goals.router)
 app.include_router(chain.router)
 app.include_router(chat.router)
 app.include_router(watchlist.router)
+app.include_router(trading.router)
 
 
 @app.get("/api/health")

@@ -1,6 +1,6 @@
 # Hedge Fund OS — Architecture Design
 
-Status: accepted (spikes resolved 2026-11-25), pending owner review.
+Status: accepted — owner-approved 2026-11-25 (spikes resolved the same day). GitHub Actions are deliberately unused; all verification is local.
 Date: 2026-11-25. Audience: the owner-developer.
 Scope: joins what the HedgeFund repo (the Aurelio wealth OS), ScalpFX (paper
 trading desk) and Vibe-Trading (research/validation lab) already are into one

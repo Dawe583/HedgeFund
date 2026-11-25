@@ -105,3 +105,15 @@ run `uv run uvicorn app.main:app --port 8000` in `backend/` and `npm run dev` in
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+## Hedge fund platform (this fork)
+
+This fork is being developed into a private, single-owner hedge-fund platform:
+the Aurelio wealth ledger plus a trading plane — a backtest kernel, an enforced
+statistical validation gate (permutation test, bootstrap Sharpe CI, walk-forward),
+a paper engine with risk rails, and trading sections in the dashboard. The
+architecture, the decisions and the milestone plan live in
+[docs/design/hedge-fund-os.md](docs/design/hedge-fund-os.md); deployment and
+remote access in [docs/design/deployment-and-access.md](docs/design/deployment-and-access.md).
+No strategy reaches paper without passing the gate; nothing reaches live without
+the audit. All verification is local — this project does not use CI services.

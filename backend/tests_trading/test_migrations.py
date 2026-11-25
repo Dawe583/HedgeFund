@@ -1,4 +1,5 @@
-"""Tests for SQLite schema migration (weights_blob) and WS kline parsing
+"""Tests for schema authority (init_schema owns DDL, make_engine never does),
+the legacy weights_blob guard, and WS kline parsing
 (spot lowercase h/l vs futures H/L, invalid payload skip)."""
 
 import datetime as dt
@@ -6,7 +7,7 @@ import datetime as dt
 from sqlalchemy import inspect, select, text
 
 from trading.feeds.binance import _kline_from_ws
-from trading.models import ModelVersion, make_engine, make_session_factory
+from trading.models import ModelVersion, init_schema, make_engine, make_session_factory
 
 # --------------------------------------------------------------- migrations
 OLD_SCHEMA = """
@@ -30,17 +31,19 @@ def _column_count(engine, table: str, column: str) -> int:
     return cols.count(column)
 
 
-def test_make_engine_migrates_old_schema(tmp_path):
+def test_init_schema_migrates_old_schema(tmp_path):
     # 1) create an old-schema DB by hand, without weights_blob
     db = tmp_path / "old.db"
     old = make_engine(f"sqlite:///{db}")
+    init_schema(old)
     with old.begin() as conn:
         conn.execute(text("DROP TABLE model_versions"))
         conn.execute(text(OLD_SCHEMA))
     old.dispose()  # simulate process restart
 
-    # 2) make_engine on the old DB must migrate + work
+    # 2) init_schema on the old DB must migrate + work
     engine = make_engine(f"sqlite:///{db}")
+    init_schema(engine)
     assert _column_count(engine, "model_versions", "weights_blob") == 1
 
     sf = make_session_factory(engine)
@@ -61,8 +64,9 @@ def test_make_engine_migrates_old_schema(tmp_path):
         back = s.execute(select(ModelVersion)).scalars().one()
         assert back.weights_blob == '{"w": [0.1]}'
 
-    # 3) idempotent: second make_engine must not duplicate the column
+    # 3) idempotent: second init_schema must not duplicate the column
     engine2 = make_engine(f"sqlite:///{db}")
+    init_schema(engine2)
     assert _column_count(engine2, "model_versions", "weights_blob") == 1
     sf2 = make_session_factory(engine2)
     with sf2() as s:
@@ -71,11 +75,23 @@ def test_make_engine_migrates_old_schema(tmp_path):
     engine2.dispose()
 
 
-def test_make_engine_fresh_schema_untouched(tmp_path):
+def test_init_schema_fresh_schema_untouched(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path}/fresh.db")
+    init_schema(engine)
     assert _column_count(engine, "model_versions", "weights_blob") == 1
     # create_all made all model tables — sanity that nothing else got mangled
     assert inspect(engine).has_table("model_versions")
+    engine.dispose()
+
+
+def test_make_engine_never_creates_tables(tmp_path):
+    """A connection engine is never DDL: opening a database must not decide
+    what it contains — Alembic is the one migration authority in the platform
+    database and init_schema everywhere else. A read path that creates tables
+    silently forks that lineage (this once broke `alembic upgrade` on the
+    owner's database copy)."""
+    engine = make_engine(f"sqlite:///{tmp_path}/ro.db")
+    assert inspect(engine).get_table_names() == []
     engine.dispose()
 
 

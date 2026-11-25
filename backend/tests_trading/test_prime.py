@@ -13,7 +13,7 @@ from trading.agents.openrouter import OpenRouterClient
 from trading.agents.prime import PrimeOrchestrator
 from trading.backtest.engine import Signal
 from trading.ml.pipeline import TF_CONFIG, retrain_all_timeframes
-from trading.models import make_engine, make_session_factory
+from trading.models import init_schema, make_engine, make_session_factory
 
 
 def _offline_client() -> OpenRouterClient:
@@ -24,7 +24,9 @@ def _offline_client() -> OpenRouterClient:
 
 @pytest.fixture
 def session_factory():
-    return make_session_factory(make_engine("sqlite://"))
+    engine = make_engine("sqlite://")
+    init_schema(engine)
+    return make_session_factory(engine)
 
 
 @pytest.fixture
@@ -110,6 +112,7 @@ def test_gate_source_columns_and_default(tmp_path):
     from sqlalchemy import inspect
 
     engine = make_engine(f"sqlite:///{tmp_path}/g.db")
+    init_schema(engine)
     cols_t = {c["name"] for c in inspect(engine).get_columns("trades")}
     cols_p = {c["name"] for c in inspect(engine).get_columns("open_positions")}
     assert "gate_source" in cols_t and "gate_source" in cols_p
@@ -158,6 +161,7 @@ def test_gate_source_columns_and_default(tmp_path):
         assert p.gate_source == "prime_local"
     # idempotent second boot
     engine2 = make_engine(f"sqlite:///{tmp_path}/g.db")
+    init_schema(engine2)
     assert "gate_source" in {c["name"] for c in inspect(engine2).get_columns("trades")}
     engine.dispose()
     engine2.dispose()

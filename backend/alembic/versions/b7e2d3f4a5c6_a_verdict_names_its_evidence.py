@@ -24,6 +24,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Same adoption tolerance as the parent revision a3f1c2d4e5b6: the buggy
+    # read-path create_all created every trading table at once, including this
+    # one, and the schema is identical either way — adopt, never strand.
+    existing = set(sa.inspect(op.get_bind()).get_table_names())
+    if "backtest_validations" in existing:
+        return
     op.create_table(
         "backtest_validations",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -57,4 +63,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("backtest_validations")
+    existing = set(sa.inspect(op.get_bind()).get_table_names())
+    if "backtest_validations" in existing:
+        op.drop_table("backtest_validations")

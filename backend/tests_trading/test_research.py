@@ -15,6 +15,7 @@ from trading.harness import wrap as harness_wrap
 from trading.models import (
     BacktestRun,
     BacktestValidation,
+    init_schema,
     make_engine,
     make_session_factory,
 )
@@ -161,6 +162,7 @@ def test_walk_forward_counts_profitable_windows():
 
 def _seed_research_db(db_url: str, df) -> None:
     engine = make_engine(db_url)
+    init_schema(engine)
     sf = make_session_factory(engine)
     with sf() as session:
         upsert_candles(session, "BTCUSDT", "4h", _candle_rows(df))
@@ -240,6 +242,7 @@ def test_ingest_uses_public_feed_without_network_in_tests(tmp_path, monkeypatch)
     assert venue == "binance"
 
     engine = make_engine(db_url)
+    init_schema(engine)
     sf = make_session_factory(engine)
     from trading.storage import load_candles_df
 

@@ -5,7 +5,7 @@ import pytest
 
 from trading.agents.forecaster import Forecaster, _f
 from trading.agents.openrouter import OpenRouterClient
-from trading.models import AgentPrediction, make_engine, make_session_factory
+from trading.models import AgentPrediction, init_schema, make_engine, make_session_factory
 
 
 def _offline_client() -> OpenRouterClient:
@@ -16,7 +16,9 @@ def _offline_client() -> OpenRouterClient:
 
 @pytest.fixture
 def sf():
-    return make_session_factory(make_engine("sqlite://"))
+    engine = make_engine("sqlite://")
+    init_schema(engine)
+    return make_session_factory(engine)
 
 
 @pytest.fixture

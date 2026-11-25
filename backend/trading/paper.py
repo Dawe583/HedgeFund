@@ -24,6 +24,8 @@ from trading.features import build_features, candles_to_df
 from trading.feeds.binance import stream_klines
 from trading.feeds.fallback import fetch_candles_any
 from trading.models import (
+    init_schema,
+    make_engine,
     AgentInsight,
     AgentPrediction,
     BotStatus,
@@ -110,10 +112,17 @@ def _acquire_worker_lock() -> bool:
     return True
 
 
+
+def _engine_with_schema():
+    """The paper worker is a writer and owns its startup schema init."""
+    engine = make_engine()
+    init_schema(engine)
+    return engine
+
 class PaperEngine:
     def __init__(self):
         self.s = get_settings()
-        self.session_factory = make_session_factory()
+        self.session_factory = make_session_factory(_engine_with_schema())
         self.risk = RiskManager(self.s)
         from trading.bots import HFTMomentum, ScalpTrend
 

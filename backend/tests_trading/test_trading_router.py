@@ -14,6 +14,7 @@ from app.routers.trading import get_trading_db, router
 from trading.models import (
     BacktestRun,
     BacktestValidation,
+    init_schema,
     make_engine,
     make_session_factory,
 )
@@ -22,6 +23,7 @@ from trading.models import (
 @pytest.fixture
 def client(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path}/trading.db")
+    init_schema(engine)
     sf = make_session_factory(engine)
 
     def override():
@@ -133,3 +135,42 @@ def test_status_counts_validations(client):
     _write_verdict(sf)
     res = c.get("/api/trading/status")
     assert res.json()["validations_total"] == 1
+
+
+def test_read_endpoints_create_nothing(tmp_path):
+    """Schema authority: GET endpoints are reads, and reads never write.
+
+    Against a database without the trading tables, every endpoint degrades
+    to the offline answer — and the database file comes out of it with
+    exactly the tables it went in with (none). Alembic is the only authority
+    that may ever put them there.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    engine = make_engine(f"sqlite:///{tmp_path}/virgin.db")
+    sf = make_session_factory(engine)
+
+    def override():
+        db = sf()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_trading_db] = override
+    c = TestClient(app)
+
+    before = sa_inspect(engine).get_table_names()
+    res = c.get("/api/trading/status")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["engine_state"] == "offline"
+    assert body["db_ok"] is False  # trading tables absent: said, never fixed behind the user's back
+    assert c.get("/api/trading/backtest-runs").json() == []
+    assert c.get("/api/trading/strategies").status_code == 200  # pure code registry, no db
+    assert c.get("/api/trading/backtest-runs/1").status_code == 404
+    after = sa_inspect(engine).get_table_names()
+    assert after == before
+    engine.dispose()

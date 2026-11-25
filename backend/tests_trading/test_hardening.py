@@ -13,9 +13,11 @@ from trading.risk import RiskManager
 
 @pytest.fixture
 def session_factory(tmp_path):
-    from trading.models import make_engine
+    from trading.models import init_schema, make_engine
 
-    return make_session_factory(make_engine(f"sqlite:///{tmp_path}/test.db"))
+    engine = make_engine(f"sqlite:///{tmp_path}/test.db")
+    init_schema(engine)
+    return make_session_factory(engine)
 
 
 # ------------------------------------------------------------------ upsert

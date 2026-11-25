@@ -14,7 +14,7 @@ from trading.agents.memory import (
 from trading.agents.openrouter import OpenRouterClient
 from trading.agents.reviewer import SignalReviewer
 from trading.backtest.engine import Signal
-from trading.models import AgentMemory, Trade, make_engine, make_session_factory
+from trading.models import AgentMemory, Trade, init_schema, make_engine, make_session_factory
 
 NOTIONAL = 0.01 * 77_000.0  # qty * entry_price used in _trade below
 
@@ -28,7 +28,9 @@ def _offline_client() -> OpenRouterClient:
 
 @pytest.fixture
 def session_factory():
-    return make_session_factory(make_engine("sqlite://"))
+    engine = make_engine("sqlite://")
+    init_schema(engine)
+    return make_session_factory(engine)
 
 
 @pytest.fixture
@@ -147,7 +149,9 @@ def test_prune_decays_working_but_keeps_deep(session_factory, loop):
 
 @pytest.mark.asyncio
 async def test_reviewer_prompt_includes_lessons():
-    sf = make_session_factory(make_engine("sqlite://"))
+    _e = make_engine("sqlite://")
+    init_schema(_e)
+    sf = make_session_factory(_e)
     loop = LearningLoop(sf, _offline_client())
     await loop.record_outcome(_trade())
     reviewer = SignalReviewer(_offline_client())

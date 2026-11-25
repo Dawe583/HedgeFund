@@ -42,6 +42,7 @@ from trading.harness import wrap as harness_wrap
 from trading.models import (
     BacktestRun,
     BacktestValidation,
+    init_schema,
     make_engine,
     make_session_factory,
 )
@@ -115,6 +116,7 @@ async def _ingest(symbol: str, timeframe: str, days: int, db_url: str) -> tuple[
 
     rows, venue = await fetch_candles_any(symbol=symbol, interval=timeframe, days=days)
     engine = make_engine(db_url)
+    init_schema(engine)
     sf = make_session_factory(engine)
     with sf() as session:
         inserted = upsert_candles(session, symbol.upper(), timeframe, rows)
@@ -267,6 +269,7 @@ def validate_strategy(
     data_end = str(df.index[-1])
 
     app_engine = make_engine(app_db)
+    init_schema(app_engine)
     app_sf = make_session_factory(app_engine)
     with app_sf() as session:
         run = BacktestRun(

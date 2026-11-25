@@ -253,6 +253,15 @@ class BacktestValidation(Base):
 
 
 def make_engine(url: str | None = None):
+    """A connection engine. Never DDL.
+
+    Schema creation is Alembic's job in the platform database (design D3:
+    one migration lineage) and `init_schema`'s everywhere else — a function
+    that merely opens a database must not decide what the database contains,
+    because a read path that creates tables silently forks the migration
+    lineage (this once made `alembic upgrade` fail on the owner's database
+    copy with `table candles already exists`).
+    """
     settings = get_settings()
     url = url or settings.database_url
     kwargs: dict = {"echo": False}
@@ -273,9 +282,21 @@ def make_engine(url: str | None = None):
     engine = create_engine(url, **kwargs)
     if url.startswith("sqlite"):
         _tune_sqlite(engine)
+    return engine
+
+
+def init_schema(engine) -> None:
+    """Create the trading tables and apply the legacy column guard.
+
+    Called by writers and owners of their own database files: the research
+    CLI (ingest and validate), the paper engine at startup, and every test
+    fixture working against a throwaway database. Never called from a read
+    path. On the platform database this is a no-op in practice — Alembic
+    creates the same tables from the same models first — and the guard below
+    only ever adds a column that is missing, so the two cannot disagree.
+    """
     Base.metadata.create_all(engine)
     _migrate_sqlite(engine)
-    return engine
 
 
 # Columns added after initial schema; applied idempotently on every startup.

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import type { ChatPage } from "./api/chat";
 import type { Institution } from "./api/institutions";
 import type { Liability } from "./api/liabilities";
@@ -20,7 +20,14 @@ import { CURRENCY_LIST } from "./components/ui";
 import { correctionAsked, dividendsNote, recordedFor } from "./components/catchUpNote";
 import DividendQuestions, { BANNER_FORMATS } from "./components/DividendQuestions";
 import { recognisedLine, waitingLine } from "./components/dividendQuestion";
+
 import type { Focus } from "./nav";
+// Trading is lazy on purpose, and the laziness is load-bearing: it is the
+// first tab that draws charts and grids with the heavy visualization stack
+// (lightweight-charts, and Perspective's wasm engine behind it), and none of
+// that weight belongs in the chunk every wealth page pays for. The dynamic
+// import is the code-splitting boundary itself.
+const Trading = lazy(() => import("./components/Trading"));
 
 // Four voices, grouped by what you are DOING rather than by database table:
 // read the overview, read the investments, enter records, describe yourself.
@@ -35,6 +42,7 @@ import type { Focus } from "./nav";
 const TABS = [
   { key: "dashboard", label: "Dashboard", wide: true },
   { key: "portfolio", label: "Portfolio", wide: true },
+  { key: "trading", label: "Trading", wide: true },
   { key: "records", label: "Records", wide: true },
   { key: "profile", label: "Profile", wide: false },
 ] as const;
@@ -282,8 +290,14 @@ export default function App() {
   // page is titled after, never a row inside it. Read at the moment a
   // question is sent, so each question carries its own. The server turns the
   // ids into names, and answers for the level above one that is gone.
-  let page: ChatPage;
-  if (reading === "list") page = { kind: "analyses" };
+  // The trading tab is not in the chat's page vocabulary yet — the backend's
+  // ChatPage union does not know it. Rather than lying ("asked on Portfolio"),
+  // questions asked there carry no page at all: null is what the request type
+  // already allows, and what "nothing honest to say" is for. When the backend
+  // learns the trading page kind, this branch sends it.
+  let page: ChatPage | null;
+  if (tab === "trading" && reading === null) page = null;
+  else if (reading === "list") page = { kind: "analyses" };
   else if (reading !== null) page = { kind: "analysis", run_id: reading };
   else if (tab === "records" && recordsPage === "wealth" && account !== null)
     page =
@@ -295,6 +309,7 @@ export default function App() {
   else if (tab === "records" && recordsPage === "debts" && debt !== null)
     page = { kind: "debt", liability_id: debt.id };
   else if (tab === "records") page = { kind: "records", section: recordsPage };
+  else if (tab === "trading") page = null; // unreachable with reading null, but never a lie
   else page = { kind: tab };
 
   // A term in that sentence, pressed. The tab moves, the sub-page moves with
@@ -471,6 +486,11 @@ export default function App() {
                   focus={focus === "ledger" ? "ledger" : null}
                   onFocused={() => setFocus(null)}
                 />
+              )}
+              {tab === "trading" && (
+                <Suspense fallback={<p className="text-ink-soft">Loading the trading page…</p>}>
+                  <Trading />
+                </Suspense>
               )}
               {tab === "records" && (
                 <Records

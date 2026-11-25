@@ -626,7 +626,7 @@ export default function ChatPanel({
   /** Where the reader is right now. Sent with each question at the moment it
       is sent, so a conversation that follows them across pages keeps, per
       question, where that question was asked. */
-  page: ChatPage;
+  page: ChatPage | null;
   /** Send the reader to one analysis run, in the main column. The panel does
       not render it: a verdict is a document and this is a narrow column, which
       is the argument that kept the chain on a page and does not disappear with

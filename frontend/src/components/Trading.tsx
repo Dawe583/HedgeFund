@@ -11,6 +11,9 @@ import {
   type TradingStatus,
   type TradingStrategy,
 } from "../api/trading";
+import { Blotter } from "../viz/Blotter";
+import { EquityChart } from "../viz/EquityChart";
+import { fromApiCurve } from "../viz/equityData";
 import { EmptyState } from "./Emblem";
 import { apiError, cardClass, Section, statLabelClass } from "./ui";
 import {
@@ -119,7 +122,10 @@ const PROVENANCE_LABELS: [keyof RunProvenance, string][] = [
 ];
 
 
-function RunDetail({ id }: { id: number }) {
+/** The expanding row body. Exported (as RunDetailForTest) because the render
+    tests mount it standalone, without the table row that normally owns it —
+    same component, no test-only behaviour. */
+export function RunDetail({ id }: { id: number }) {
   const [detail, setDetail] = useState<BacktestRunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -211,9 +217,48 @@ function RunDetail({ id }: { id: number }) {
         </div>
       </div>
       </div>
+      {/* The equity curve and the blotter below the figures — the numbers
+          say what happened, these show HOW it happened. Both carry the same
+          honesty rule as the rest of the detail: null means the run predates
+          the recording, and the sentence says so instead of drawing nothing
+          or inventing points. The blotter is Perspective behind a lazy import,
+          so it costs nothing for a detail nobody opens. */}
+      <div className="mt-4">
+        <h4 className={statLabelClass}>Equity curve</h4>
+        <div className="mt-1">
+          {detail.equity_curve === null ? (
+            <p className="py-6 text-center text-sm text-ink-soft">
+              Equity curve not recorded for this run — it predates the recording.
+            </p>
+          ) : (
+            <EquityChart
+              data={fromApiCurve(detail.equity_curve)}
+              emptyText="The recorded curve has fewer than two distinct points — not enough to draw."
+            />
+          )}
+        </div>
+      </div>
+      <div className="mt-4">
+        <h4 className={statLabelClass}>Trades</h4>
+        <div className="mt-1">
+          {detail.trades === null ? (
+            <p className="py-6 text-center text-sm text-ink-soft">
+              Trades not recorded for this run — it predates the recording.
+            </p>
+          ) : (
+            <Blotter
+              rows={detail.trades.map((t) => ({ ...t }))}
+              columns={["entry_time", "exit_time", "side", "qty", "entry_price", "exit_price", "pnl"]}
+              empty="No trades — the run never opened a position, which is what zero trades means."
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
+
+export const RunDetailForTest = RunDetail;
 
 function ResearchSection({ runs, error }: { runs: BacktestRun[] | null; error: string | null }) {
   const [openId, setOpenId] = useState<number | null>(null);

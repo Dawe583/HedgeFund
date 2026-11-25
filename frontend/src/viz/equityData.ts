@@ -44,3 +44,23 @@ export function change(points: EquityPoint[]): { from: number; to: number; pct: 
   // a number, and printing "∞%" is worse than printing nothing.
   return { from, to, pct: from !== 0 ? (to - from) / Math.abs(from) : null };
 }
+
+/* The wire-to-chart boundary. The API sends ISO timestamps; lightweight-charts
+   wants unix seconds. One function, both directions of failure named: a
+   timestamp that does not parse is DROPPED, not coerced — a point at the
+   wrong time is a lie, a missing point is visible in the count. The caller
+   compares input length to output length if the discrepancy matters; for a
+   finished backtest's curve, silently re-timed points are the worse failure. */
+
+/** Convert the API's `{t: iso, equity}` rows into chart points — unix seconds,
+    unparseable timestamps dropped. Unsorted output is fine: sortedUnique is
+    the chart's own gate. */
+export function fromApiCurve(rows: { t: string; equity: number }[]): EquityPoint[] {
+  const out: EquityPoint[] = [];
+  for (const r of rows) {
+    const ms = Date.parse(r.t);
+    if (Number.isNaN(ms)) continue;
+    out.push({ time: Math.floor(ms / 1000), value: r.equity });
+  }
+  return out;
+}

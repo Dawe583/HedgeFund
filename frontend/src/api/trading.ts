@@ -50,7 +50,40 @@ export type RunProvenance = Schemas["TradingProvenance"];
     sentences — which check failed and why — empty when validation never ran,
     in which case `provenance` is null and the verdict statistics
     (prob_positive, sharpe_actual, min_trades_required) are explicit nulls. */
-export type BacktestRunDetail = Schemas["TradingRunDetail"];
+export type BacktestRunDetail = Schemas["TradingRunDetail"] & {
+  /* The equity curve and the trade blotter the run recorded. These keys are
+     NOT in the generated schema yet — the backend lane lands them in the same
+     milestone; after its commit `npm run gen:types` picks them up and this
+     intersection narrows back to the plain generated type. Both are
+     explicitly nullable: null means the run predates the recording (or the
+     recorder never ran on it), and the UI says exactly that instead of
+     inventing a curve. */
+  equity_curve: ApiEquityPoint[] | null;
+  trades: BacktestTrade[] | null;
+};
+
+/** One point of a run's recorded equity curve: the bar timestamp as an ISO
+    string and the portfolio equity at that moment. Conversion to the chart's
+    unix-seconds shape lives in viz/equityData.ts — the wire format is the
+    backend's, the chart format is the chart's, and the mapping is one tested
+    function, not a spread of ad hoc Date parsing. */
+export interface ApiEquityPoint {
+  t: string;
+  equity: number;
+}
+
+/** One closed trade of a run: entry/exit instants, direction, quantity,
+    both prices and the realized pnl. What the blotter rows are made of —
+    flat by design, because a datagrid column is exactly one flat key. */
+export interface BacktestTrade {
+  entry_time: string;
+  exit_time: string;
+  side: "long" | "short";
+  qty: number;
+  entry_price: number;
+  exit_price: number;
+  pnl: number;
+}
 
 /* The verdict as the backend writes it — lowercase, because that is what the
    validation pipeline stores. The generated type is plain `string | null`

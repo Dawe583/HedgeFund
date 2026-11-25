@@ -73,3 +73,21 @@ test("the change figure is first-to-last, as a ratio — null against a zero sta
   ]);
   assert.equal(zero.pct, null);
 });
+
+test("fromApiCurve converts ISO rows to unix seconds and drops unparseable timestamps", async () => {
+  const { fromApiCurve } = await import("../src/viz/equityData.ts");
+  const points = fromApiCurve([
+    { t: "2026-11-20T08:00:00", equity: 100_000 },
+    { t: "not-a-date", equity: 99_000 },
+    { t: "2026-11-24T08:00:00", equity: 101_000 },
+  ]);
+  assert.equal(points.length, 2);
+  assert.equal(points[0].time, Math.floor(Date.parse("2026-11-20T08:00:00") / 1000));
+  assert.equal(points[0].value, 100_000);
+  assert.equal(points[1].value, 101_000);
+});
+
+test("fromApiCurve on an empty curve is empty input to the chart's own gate", async () => {
+  const { fromApiCurve } = await import("../src/viz/equityData.ts");
+  assert.equal(drawable(fromApiCurve([])), false);
+});

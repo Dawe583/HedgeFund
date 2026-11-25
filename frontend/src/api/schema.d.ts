@@ -5393,6 +5393,13 @@ export interface components {
             /** Known Countries */
             known_countries: components["schemas"]["TaxCountryDefault"][];
         };
+        /** TradingEquityPoint */
+        TradingEquityPoint: {
+            /** Equity */
+            equity: number;
+            /** T */
+            t: string;
+        };
         /** TradingProvenance */
         TradingProvenance: {
             /** Data End */
@@ -5412,6 +5419,8 @@ export interface components {
             bot: string;
             /** Created At */
             created_at: string | null;
+            /** Equity Curve */
+            equity_curve: components["schemas"]["TradingEquityPoint"][] | null;
             /** Id */
             id: number;
             metrics: components["schemas"]["TradingRunMetrics"];
@@ -5434,6 +5443,8 @@ export interface components {
             symbol: string;
             /** Timeframe */
             timeframe: string;
+            /** Trades */
+            trades: components["schemas"]["TradingTradeEvidence"][] | null;
             /** Trades Count */
             trades_count: number;
             validation: components["schemas"]["TradingValidationSummary"] | null;
@@ -5504,6 +5515,23 @@ export interface components {
             symbols: string[];
             /** Timeframe */
             timeframe: string;
+        };
+        /** TradingTradeEvidence */
+        TradingTradeEvidence: {
+            /** Entry Price */
+            entry_price: number;
+            /** Entry Time */
+            entry_time: string;
+            /** Exit Price */
+            exit_price: number;
+            /** Exit Time */
+            exit_time: string;
+            /** Pnl */
+            pnl: number;
+            /** Qty */
+            qty: number;
+            /** Side */
+            side: string;
         };
         /** TradingValidationSummary */
         TradingValidationSummary: {

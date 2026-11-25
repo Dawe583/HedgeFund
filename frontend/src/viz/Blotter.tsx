@@ -47,6 +47,7 @@ export function Blotter({
 }) {
   const [client, setClient] = useState<psp.Client | null>(null);
   const [ready, setReady] = useState(false);
+  const [bootFailed, setBootFailed] = useState(false);
   const tableRef = useRef<psp.Table | null>(null);
   // One table name per component instance. useState's initializer rather than
   // a ref: reading a ref during render is a lint error under the React
@@ -61,9 +62,19 @@ export function Blotter({
     if (rowsEmpty) return;
     let alive = true;
     void import("./perspective").then(({ getPerspectiveClient }) =>
-      getPerspectiveClient().then((c) => {
-        if (alive) setClient(c);
-      }),
+      getPerspectiveClient().then(
+        (c) => {
+          if (alive) setClient(c);
+        },
+        () => {
+          // A failed boot (the wasm unfetchable offline, an engine error) is
+          // a fact, not a crash: without this rejection handler the failure
+          // is an unhandled promise rejection that poisons the page — and in
+          // test environments, the whole run. The blotter says its engine
+          // failed instead of spinning "loading" forever.
+          if (alive) setBootFailed(true);
+        },
+      ),
     );
     return () => {
       alive = false;
@@ -129,6 +140,13 @@ export function Blotter({
     return (
       <div className="flex items-center justify-center text-sm text-ink-soft" style={{ height }}>
         {empty}
+      </div>
+    );
+  }
+  if (bootFailed) {
+    return (
+      <div className="flex items-center justify-center text-sm text-ink-soft" style={{ height }}>
+        The grid engine could not start — the rows exist, the viewer does not.
       </div>
     );
   }

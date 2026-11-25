@@ -8,7 +8,7 @@
     "gen:types": "node scripts/gen-api-types.mjs",
     "build": "npm run gen:types && tsc -b && vite build",
     "lint": "eslint .",
-    "test": "node --experimental-strip-types --test \"tests/*.test.ts\"",
+    "test": "node --experimental-strip-types --import ./tests/hooks/register.mjs --test \"tests/*.test.ts\"",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -30,14 +30,17 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "esbuild": "^0.28.2",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
+    "jsdom": "^31.0.1",
     "openapi-typescript": "^7.13.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",

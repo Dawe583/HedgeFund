@@ -107,3 +107,41 @@ stop/tp intrabar; gap-through fills at the open; children of a bracket are
 reduce-only and accepted while flat; manual closes cancel the resting
 children cleanly (60/60 canceled in the verification run); zero-fee
 instrument accounting is exact to the cent.
+
+## 6. Live-clock divergence class: asynchronous command execution (measured 2026-11-25, evening)
+
+The backtester executes a trading command synchronously inside the data step
+that triggered it — the fill is instantaneous against the market state at
+that instant. The live engine cannot do this by construction: the strategy
+runs inside the data task, and its commands travel two asyncio queue hops
+(risk engine, then execution engine, each enqueued via `call_soon` on the
+loop). The command therefore executes whenever the chain clears, against
+whatever market state exists then. Two consequences, both measured in the
+M3 paper-parity flake (`test_paper_matches_backtest_on_same_bars`):
+
+| aspect | backtest | live engine |
+|---|---|---|
+| market order submitted from `on_bar(k)` | fills inside bar k's data step at close(k) | fills when the risk/exec chain drains; in an un-paced compressed tape that is routinely AFTER bar k+1's quote — fill price exactly close(k+1), stamped on bar k+1 |
+| cancel of a resting protective order | the order is dead the instant the command is issued | the order remains fillable intrabar while the cancel travels the chain; the reduce-only close ordering can invert (measured: `REDUCE_ONLY MARKET SELL order would have increased position` rejections when the intrabar stop beat the timeout exit command to the venue) |
+
+The replay flake's shape, measured across six parallel runs pre-fix: every
+divergent entry fill landed exactly one bar late (raw fill == close(k+1),
+never partial, never random) with per-trade independence — a scheduling
+race, not a logic divergence. The race window is the interval between the
+start of `on_bar(k)` and the submission inside it: emission of bar k+1 in
+that window puts its quote in the book before the command chain clears.
+Wider under CPU contention, which is why the flake rate scaled with load
+(6/6 divergent parallel vs intermittent serial).
+
+**The harness contract that erases the class for replay:** emission of bar
+k+1 is gated on (a) `on_bar` for bar k having *completed* (not merely
+started — the mid-evaluation window is the race), and (b) every command
+being adjudicated *including cancels in flight*, which are tracked
+separately because their targets are already-adjudicated ids. With that
+pacing, the live tape is a strict fast-forward of the backtest and the
+parity test passes exactly — 6/6 parallel runs bit-identical to the
+backtest's entry/exit/pnl rows post-fix. In production the class does not
+need erasing: the wall-clock cadence (hours per bar against milliseconds of
+chain latency) is the same quiescence property with a margin of ~10^6, and
+the residual live-only semantics (a fill at the market state when the chain
+clears, not at close(k) exactly) is real-venue truth, not an artifact.

@@ -5419,6 +5419,8 @@ export interface components {
             bot: string;
             /** Created At */
             created_at: string | null;
+            /** Engine Version */
+            engine_version: string | null;
             /** Equity Curve */
             equity_curve: components["schemas"]["TradingEquityPoint"][] | null;
             /** Id */
@@ -5457,6 +5459,8 @@ export interface components {
             bot: string;
             /** Created At */
             created_at: string | null;
+            /** Engine Version */
+            engine_version: string | null;
             /** Id */
             id: number;
             metrics: components["schemas"]["TradingRunMetrics"];

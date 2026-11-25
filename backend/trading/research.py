@@ -35,11 +35,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from trading.backtest.engine import BTConfig, BarsPerYear, run_backtest
+from trading.backtest.engine import BTConfig, BarsPerYear
 from trading.bots import BreakoutVol, HFTMomentum, MeanRev, ScalpTrend
 from trading.config import get_settings
 from trading.features import build_features
-from trading.harness import wrap as harness_wrap
+from trading.kernel import run_kernel_backtest
 from trading.models import (
     BacktestRun,
     BacktestValidation,
@@ -56,6 +56,13 @@ log = logging.getLogger("trading.research")
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_RESEARCH_DB = f"sqlite:///{_BACKEND_DIR / 'data' / 'research.db'}"
 DEFAULT_APP_DB = f"sqlite:///{_BACKEND_DIR / 'data.db'}"
+# Which execution engine produced the runs this module writes. The string is
+# provenance, not configuration: it changes only when the execution layer
+# does, and rows written under different execution semantics must never read
+# as the same experiment. Format: kernel version + the harness execution model
+# (docs/research/kernel-diff-2026-11-25.md).
+ENGINE_VERSION = "nautilus-1.231.0+delayed-close"
+
 
 DEFAULT_SEED = 42
 MIN_TRADES = 30
@@ -209,7 +216,7 @@ def validate_strategy(
     bars_per_year = BarsPerYear.get(timeframe, 8_760)
     strategy = spec["cls"]()
     cfg = cfg or BTConfig()
-    result = run_backtest(df, harness_wrap(strategy), cfg, timeframe)
+    result = run_kernel_backtest(df, strategy, cfg, timeframe)
 
     records = trades_to_records(result.trades, symbol.upper())
     initial = float(cfg.initial_equity)
@@ -319,6 +326,7 @@ def validate_strategy(
             total_return_pct=float(metrics.get("total_return_pct", 0.0)),
             equity_curve_json=json.dumps(curve),
             trades_json=json.dumps(trades_payload),
+            engine_version=ENGINE_VERSION,
         )
         session.add(run)
         session.flush()
@@ -346,6 +354,7 @@ def validate_strategy(
             reasons_json=json.dumps(reasons),
             validation_json=json.dumps(validation_payload, default=str),
             run_id=run.id,
+            engine_version=ENGINE_VERSION,
         )
         session.add(row)
         session.commit()

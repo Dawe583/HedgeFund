@@ -168,6 +168,7 @@ def _run_payload(run: BacktestRun, validation: BacktestValidation | None) -> dic
             else None
         ),
         "created_at": _as_iso(run.created_at),
+        "engine_version": run.engine_version,
     }
 
 

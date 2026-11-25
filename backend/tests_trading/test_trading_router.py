@@ -222,7 +222,7 @@ def test_read_endpoints_create_nothing(tmp_path):
 
 RUN_ITEM_KEYS = {
     "id", "bot", "symbol", "timeframe", "started_at", "trades_count",
-    "metrics", "verdict", "validation", "created_at",
+    "metrics", "verdict", "validation", "created_at", "engine_version",
 }
 METRICS_KEYS = {"win_rate", "profit_factor", "sharpe", "max_dd_pct", "total_return_pct"}
 VALIDATION_KEYS = {"permutation_p", "sharpe_ci_lo", "sharpe_ci_hi", "wf_positive_folds", "wf_total_folds"}

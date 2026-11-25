@@ -84,6 +84,7 @@ const BASE = {
   verdict: null,
   validation: null,
   created_at: "2026-11-25T01:17:54",
+  engine_version: "nautilus-1.231.0+delayed-close",
   params: {},
   provenance: null,
   reasons: [],

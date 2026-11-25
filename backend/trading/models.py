@@ -214,6 +214,7 @@ class BacktestRun(Base):
     model_id: Mapped[int | None] = mapped_column(ForeignKey("model_versions.id"), nullable=True)
     equity_curve_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     trades_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    engine_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     model: Mapped[ModelVersion | None] = relationship(back_populates="runs")
 
@@ -252,6 +253,7 @@ class BacktestValidation(Base):
     reasons_json: Mapped[str] = mapped_column(String(2048), default="[]")
     validation_json: Mapped[str] = mapped_column(Text, default="{}")
     run_id: Mapped[int | None] = mapped_column(ForeignKey("backtest_runs.id"), nullable=True)
+    engine_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 def make_engine(url: str | None = None):

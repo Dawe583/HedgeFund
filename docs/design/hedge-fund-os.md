@@ -193,13 +193,19 @@ with and without the `ts_init` close-delta shift, the fill price is the
 signalling day's close. Nautilus does not create lookahead (the strategy
 only ever sees closed bars), but it does not enforce the conservative
 next-open fill that ScalpFX's `backtest/engine.py` treats as the
-anti-lookahead standard either. Therefore the next-open execution model is
-a property of *our* harness, not of the kernel: strategies must implement
-it explicitly — signal delayed by one bar, or limit orders placed for the
-next bar's open — and the M2 acceptance must prove it (§7, §9). The
-default same-close fill is not wrong for daily strategies, but it is
-mildly optimistic, and optimism in validation is exactly what the pipeline
-exists to exclude. The fallback engine path (B-minus) is retired.
+anti-lookahead standard either. The M2 kernel migration then measured the
+stronger fact (probes and diff: `docs/research/kernel-diff-2026-11-25.md`):
+**with bar-only data, filling at the next bar's open is impossible in
+nautilus** — every synthetic OHLC update of a bar lands at the close-time
+timestamp, so "the open" never exists as a book state an order can rest into;
+the upstream documentation for 1.x says the same plainly. The harness
+therefore runs the model that is both causal and live-executable: the signal
+for bar k−1 is computed when bar k completes and the order fills at close(k)
+— every fill strictly after every bar the strategy saw, which the M2
+acceptance proves. The ported engine's open(i+1) fills are retired as an
+idealization no venue offers; the execution standard is "one bar of
+information latency, close-of-bar fill", in backtest and paper identically.
+The fallback engine path (B-minus) is retired.
 
 **Sizing is redesigned, not ported.** The seven-multiplier chain becomes
 three explicit, separately testable stages, each logging its input and
@@ -262,8 +268,8 @@ state of strategies. Writes flow into the same database.
   lifecycle state machine (§6), the approval-card integration (§6), the
   redesigned sizing (§2), multi-symbol by construction (symbol is a
   dimension of every strategy registration, never a module constant),
-  backtest/paper parity through the kernel, next-open execution enforced
-  by the harness on top of it (§7).
+  backtest/paper parity through the kernel, one-bar-delayed close-of-bar
+  execution enforced by the harness on top of it (§7, §2).
 - **Deleted/not carried over:** `BOT_SPECS` hardcoding, the spot-as-perp
   proxy, dead deployment code, the Next.js snapshot dashboard, `venues/`
   adapters written against a venue we will not trade first, the convoluted
@@ -578,12 +584,12 @@ spirit: pure functions of market data, anti-lookahead enforced by
 construction. Two distinct guarantees, because the spike separated them
 (§2): the kernel guarantees a strategy **never sees future data** — only
 closed bars reach `on_bar`. What the kernel does not guarantee is the
-**fill timing**: its default is the close of the signalling bar, while our
-standard is the next bar's open (the conservative execution model of
-ScalpFX's `backtest/engine.py`). The harness therefore wraps every
-strategy: signals are delayed one bar before order placement (or placed
-as limit orders at the next open), in backtest and paper identically —
-same wrapper in both, which is what keeps parity meaningful. A test in M2
+**fill timing**: its default is the close of the signalling bar, and no
+mechanism fills at the next bar's open with bar-only data (measured in M2,
+§2). The harness therefore wraps every strategy: the signal for bar k−1 is
+evaluated when bar k completes and fills at close(k), in backtest and paper
+identically — same wrapper in both, which is what keeps parity meaningful.
+A test in M2
 proves a harness-wrapped strategy fills no earlier than the bar after its
 signal. `Signal` carries side,
 confidence, stop distance, take-profit — never size; sizing is the system's
@@ -598,8 +604,8 @@ parameter set on one universe — anything else is a new promise.
 **Validation gate, enforced before paper:**
 1. Anti-lookahead audit, now in two parts: the harness never hands future
    data to the strategy (a test writes a cheating strategy and proves it
-   cannot see ahead), and the execution wrapper enforces next-open fills
-   (a test asserts no fill timestamp precedes the bar after the signal).
+   cannot see ahead), and the execution wrapper enforces post-signal fills
+   (a test asserts no fill happens before the bar after the signal).
 2. Backtest over the full available history: minimum trade count (Vibe's
    permutation test itself demands ≥3; we set the bar at 30 for the CI to
    mean anything — exact number fixed in M2 by measurement, recorded in
@@ -723,11 +729,14 @@ a scaffold.
 - Vendor Vibe's validation trio into `backend/trading/validation/`; port
   ScalpTrend as the reference pure strategy.
 - **Kernel confirmed:** backtests run on nautilus 1.231.0 behind the
-  harness. The harness implements the next-open execution wrapper (§7) on
-  top of the kernel's default same-close fill. A one-time reference diff
-  against the ported `backtest/engine.py` on the ScalpTrend migration
-  documents expected fill-model differences (fill timing is deliberate;
-  everything else must match within rounding).
+  harness. The harness implements the one-bar-delayed close-of-bar execution
+  wrapper (§7, §2) — next-bar-open fills proved impossible on bar-only data;
+  the measurement and the divergence analysis are in
+  `docs/research/kernel-diff-2026-11-25.md`. The design's original
+  "everything else must match within rounding" is retired there as
+  untestable: two different fill models cannot produce identical outcomes;
+  what is enforced instead is identical signal sequences, identical
+  reconstruction arithmetic, and strictly causal fill timing.
 - The validation gate implemented as code: permutation p, Sharpe CI,
   walk-forward, minimum trades, all written to `backtest_validations`;
   `research` CLI runs the whole pipeline and prints the verdict.
@@ -876,9 +885,9 @@ generation.
   engine depends on it.
 - OpenBB's actual coverage advantage for what this system reads — time-boxed
   experiment in M1, no commitment either way.
-- The harness's next-open execution wrapper is designed but unbuilt —
-  the kernel's same-close fill default is a measured fact, the wrapper is
-  M2 work with its own acceptance tests.
+- ~~The harness's execution wrapper is designed but unbuilt~~ — resolved in
+  M2: built and acceptance-tested; the next-open variant was measured
+  impossible on bar-only data and the close-of-bar delayed model replaced it.
 
 ---
 

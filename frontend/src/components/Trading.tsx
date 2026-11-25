@@ -147,6 +147,13 @@ export function RunDetail({ id }: { id: number }) {
 
   return (
     <div className="py-3">
+      {/* engine_version is the execution layer's fingerprint: rows written
+          before the kernel migration (null) and after it are two different
+          measurements of the world, and the detail says which it is looking
+          at rather than letting them read as the same experiment */}
+      <p className="mb-3 text-xs text-ink-faint">
+        engine: {detail.engine_version ?? "not recorded — predates the kernel migration"}
+      </p>
       {detail.reasons && detail.reasons.length > 0 && (
         <div className="mb-3">
           <h4 className={statLabelClass}>The gate's reasons</h4>

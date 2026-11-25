@@ -71,6 +71,7 @@ function run(id: number, started_at: string): BacktestRun {
     verdict: null,
     validation: null,
     created_at: started_at,
+    engine_version: null,
   };
 }
 

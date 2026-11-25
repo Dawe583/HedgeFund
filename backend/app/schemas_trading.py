@@ -66,6 +66,7 @@ class TradingRunItem(BaseModel):
     verdict: str | None
     validation: TradingValidationSummary | None
     created_at: dt.datetime | None
+    engine_version: str | None
 
 
 class TradingProvenance(BaseModel):

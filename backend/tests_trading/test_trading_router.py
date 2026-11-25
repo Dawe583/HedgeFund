@@ -174,3 +174,60 @@ def test_read_endpoints_create_nothing(tmp_path):
     after = sa_inspect(engine).get_table_names()
     assert after == before
     engine.dispose()
+
+
+# ------------------------------------------------------------- wire shape
+# The contract is canonical for the frontend: keys, casing and explicit nulls
+# are the API, pinned here so a refactor cannot drift them silently.
+
+RUN_ITEM_KEYS = {
+    "id", "bot", "symbol", "timeframe", "started_at", "trades_count",
+    "metrics", "verdict", "validation", "created_at",
+}
+METRICS_KEYS = {"win_rate", "profit_factor", "sharpe", "max_dd_pct", "total_return_pct"}
+VALIDATION_KEYS = {"permutation_p", "sharpe_ci_lo", "sharpe_ci_hi", "wf_positive_folds", "wf_total_folds"}
+DETAIL_EXTRA_KEYS = {"params", "provenance", "reasons", "prob_positive", "sharpe_actual", "min_trades_required"}
+PROVENANCE_KEYS = {"seed", "data_source", "data_rows", "data_start", "data_end"}
+
+
+def test_run_list_wire_shape_is_canonical(client):
+    c, sf = client
+    _write_verdict(sf)
+    row = c.get("/api/trading/backtest-runs").json()[0]
+    assert set(row.keys()) == RUN_ITEM_KEYS
+    assert set(row["metrics"].keys()) == METRICS_KEYS
+    assert set(row["validation"].keys()) == VALIDATION_KEYS
+    assert row["verdict"] == "rejected"  # lowercase, never capitalized
+
+
+def test_run_detail_wire_shape_is_canonical(client):
+    c, sf = client
+    run_id = _write_verdict(sf)
+    body = c.get(f"/api/trading/backtest-runs/{run_id}").json()
+    assert set(body.keys()) == RUN_ITEM_KEYS | DETAIL_EXTRA_KEYS
+    assert set(body["provenance"].keys()) == PROVENANCE_KEYS
+    assert isinstance(body["reasons"], list)
+    assert isinstance(body["started_at"], str)  # ISO string on the wire
+
+
+def test_run_detail_nullable_branches_are_explicit_nulls(client):
+    """A run without a validation row still carries the keys — as null."""
+    c, sf = client
+    with sf() as session:
+        run = BacktestRun(
+            bot="hft", symbol="BTCUSDT", timeframe="1m", strategy="HFTMomentum",
+            params_json="{}", trades_n=0, win_rate=0.0, profit_factor=0.0,
+            sharpe=0.0, max_dd_pct=0.0, total_return_pct=0.0,
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+    body = c.get(f"/api/trading/backtest-runs/{run_id}").json()
+    assert set(body.keys()) == RUN_ITEM_KEYS | DETAIL_EXTRA_KEYS
+    assert body["verdict"] is None
+    assert body["validation"] is None
+    assert body["provenance"] is None
+    assert body["prob_positive"] is None
+    assert body["sharpe_actual"] is None
+    assert body["min_trades_required"] is None
+    assert body["reasons"] == []

@@ -5393,6 +5393,131 @@ export interface components {
             /** Known Countries */
             known_countries: components["schemas"]["TaxCountryDefault"][];
         };
+        /** TradingProvenance */
+        TradingProvenance: {
+            /** Data End */
+            data_end: string;
+            /** Data Rows */
+            data_rows: number;
+            /** Data Source */
+            data_source: string;
+            /** Data Start */
+            data_start: string;
+            /** Seed */
+            seed: number;
+        };
+        /** TradingRunDetail */
+        TradingRunDetail: {
+            /** Bot */
+            bot: string;
+            /** Created At */
+            created_at: string | null;
+            /** Id */
+            id: number;
+            metrics: components["schemas"]["TradingRunMetrics"];
+            /** Min Trades Required */
+            min_trades_required: number | null;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Prob Positive */
+            prob_positive: number | null;
+            provenance: components["schemas"]["TradingProvenance"] | null;
+            /** Reasons */
+            reasons: string[];
+            /** Sharpe Actual */
+            sharpe_actual: number | null;
+            /** Started At */
+            started_at: string | null;
+            /** Symbol */
+            symbol: string;
+            /** Timeframe */
+            timeframe: string;
+            /** Trades Count */
+            trades_count: number;
+            validation: components["schemas"]["TradingValidationSummary"] | null;
+            /** Verdict */
+            verdict: string | null;
+        };
+        /** TradingRunItem */
+        TradingRunItem: {
+            /** Bot */
+            bot: string;
+            /** Created At */
+            created_at: string | null;
+            /** Id */
+            id: number;
+            metrics: components["schemas"]["TradingRunMetrics"];
+            /** Started At */
+            started_at: string | null;
+            /** Symbol */
+            symbol: string;
+            /** Timeframe */
+            timeframe: string;
+            /** Trades Count */
+            trades_count: number;
+            validation: components["schemas"]["TradingValidationSummary"] | null;
+            /** Verdict */
+            verdict: string | null;
+        };
+        /** TradingRunMetrics */
+        TradingRunMetrics: {
+            /** Max Dd Pct */
+            max_dd_pct: number;
+            /** Profit Factor */
+            profit_factor: number;
+            /** Sharpe */
+            sharpe: number;
+            /** Total Return Pct */
+            total_return_pct: number;
+            /** Win Rate */
+            win_rate: number;
+        };
+        /** TradingStatus */
+        TradingStatus: {
+            /** Db Ok */
+            db_ok: boolean;
+            /**
+             * Engine State
+             * @enum {string}
+             */
+            engine_state: "offline" | "running";
+            /** Last Tick At */
+            last_tick_at: string | null;
+            /** Strategies Registered */
+            strategies_registered: number;
+            /** Validations Total */
+            validations_total: number;
+        };
+        /** TradingStrategy */
+        TradingStrategy: {
+            /** Description */
+            description: string;
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Registered */
+            registered: boolean;
+            /** Symbols */
+            symbols: string[];
+            /** Timeframe */
+            timeframe: string;
+        };
+        /** TradingValidationSummary */
+        TradingValidationSummary: {
+            /** Permutation P */
+            permutation_p: number | null;
+            /** Sharpe Ci Hi */
+            sharpe_ci_hi: number | null;
+            /** Sharpe Ci Lo */
+            sharpe_ci_lo: number | null;
+            /** Wf Positive Folds */
+            wf_positive_folds: number;
+            /** Wf Total Folds */
+            wf_total_folds: number;
+        };
         /**
          * TransactionRead
          * @description A stored transaction as returned by the API.
@@ -8869,9 +8994,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["TradingRunItem"][];
                 };
             };
         };
@@ -8893,9 +9016,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TradingRunDetail"];
                 };
             };
             /** @description Validation Error */
@@ -8924,9 +9045,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TradingStatus"];
                 };
             };
         };
@@ -8946,9 +9065,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["TradingStrategy"][];
                 };
             };
         };

@@ -21,6 +21,12 @@ from sqlalchemy import inspect, select
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.schemas_trading import (
+    TradingRunDetail,
+    TradingRunItem,
+    TradingStatus,
+    TradingStrategy,
+)
 from trading.config import get_settings
 from trading.models import (
     BacktestRun,
@@ -73,7 +79,7 @@ def _as_iso(value) -> str | None:
     return str(value)
 
 
-@router.get("/status")
+@router.get("/status", response_model=TradingStatus)
 def trading_status(db: Session = Depends(get_trading_db)) -> dict:
     """Engine state at a glance; offline is an answer, not a failure."""
     try:
@@ -114,7 +120,7 @@ def trading_status(db: Session = Depends(get_trading_db)) -> dict:
     }
 
 
-@router.get("/strategies")
+@router.get("/strategies", response_model=list[TradingStrategy])
 def trading_strategies() -> list[dict]:
     """The four ported strategies, straight from the static registry.
 
@@ -165,7 +171,7 @@ def _run_payload(run: BacktestRun, validation: BacktestValidation | None) -> dic
     }
 
 
-@router.get("/backtest-runs")
+@router.get("/backtest-runs", response_model=list[TradingRunItem])
 def list_backtest_runs(db: Session = Depends(get_trading_db)) -> list[dict]:
     """The last 50 backtest runs, each with the verdict its validation reached."""
     if not _tables_present(db):
@@ -190,7 +196,7 @@ def list_backtest_runs(db: Session = Depends(get_trading_db)) -> list[dict]:
     return [_run_payload(r, by_run.get(r.id)) for r in runs]
 
 
-@router.get("/backtest-runs/{run_id}")
+@router.get("/backtest-runs/{run_id}", response_model=TradingRunDetail)
 def backtest_run_detail(run_id: int, db: Session = Depends(get_trading_db)) -> dict:
     """One run with everything its verdict stands on: params, seed, data provenance."""
     if not _tables_present(db):
@@ -224,4 +230,7 @@ def backtest_run_detail(run_id: int, db: Session = Depends(get_trading_db)) -> d
     else:
         payload["provenance"] = None
         payload["reasons"] = []
+        payload["prob_positive"] = None
+        payload["sharpe_actual"] = None
+        payload["min_trades_required"] = None
     return payload

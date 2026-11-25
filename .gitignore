@@ -52,3 +52,11 @@ CODE_REVIEW_PROMPT.md
 EXECUTION_PROMPTS.md
 prompts/
 review-aurelio.*
+
+# ===== Local tooling / vendor: never part of the product =====
+# .ua/: knowledge-graph tooling artefacts (indexes, caches).
+.ua/
+# .spikes/: throwaway validation prototypes with their own venvs/node_modules.
+.spikes/
+# OpenTerminal/: vendored third-party checkout with its own .git, reference only.
+OpenTerminal/

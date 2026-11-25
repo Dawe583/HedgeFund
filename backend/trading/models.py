@@ -212,6 +212,8 @@ class BacktestRun(Base):
     max_dd_pct: Mapped[float] = mapped_column(Float)
     total_return_pct: Mapped[float] = mapped_column(Float)
     model_id: Mapped[int | None] = mapped_column(ForeignKey("model_versions.id"), nullable=True)
+    equity_curve_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trades_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     model: Mapped[ModelVersion | None] = relationship(back_populates="runs")
 

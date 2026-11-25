@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import datetime as dt
 import json
+import math
 import logging
 import sys
 from pathlib import Path
@@ -272,6 +273,38 @@ def validate_strategy(
     init_schema(app_engine)
     app_sf = make_session_factory(app_engine)
     with app_sf() as session:
+        # Evidence payloads the detail endpoint draws: the equity path,
+        # downsampled to at most ~2000 points so the JSON stays small enough
+        # to serve per run, and the full trade list with entry/exit times
+        # and prices — the rows the fill-model audit reads.
+        def _iso(value) -> str:
+            # Candle timestamps load timezone-naive but are UTC by ingestion
+            # contract — say so in the wire format instead of implying local time.
+            ts = pd.Timestamp(value)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            return ts.isoformat()
+
+        equity = result.equity
+        max_points = 2000
+        step = max(1, math.ceil(len(equity) / max_points))
+        curve = [
+            {"t": _iso(ts), "equity": round(float(equity.iloc[j]), 4)}
+            for j, ts in enumerate(equity.index)
+            if j % step == 0 or j == len(equity) - 1
+        ]
+        trades_payload = [
+            {
+                "entry_time": _iso(t["entry_time"]),
+                "exit_time": _iso(t["exit_time"]),
+                "side": t["side"],
+                "qty": float(t["qty"]),
+                "entry_price": float(t["entry_price"]),
+                "exit_price": float(t["exit_price"]),
+                "pnl": float(t["pnl"]),
+            }
+            for t in result.trades
+        ]
         run = BacktestRun(
             bot=bot_key,
             symbol=symbol.upper(),
@@ -284,6 +317,8 @@ def validate_strategy(
             sharpe=float(metrics.get("sharpe", 0.0)),
             max_dd_pct=float(metrics.get("max_dd_pct", 0.0)),
             total_return_pct=float(metrics.get("total_return_pct", 0.0)),
+            equity_curve_json=json.dumps(curve),
+            trades_json=json.dumps(trades_payload),
         )
         session.add(run)
         session.flush()

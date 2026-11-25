@@ -47,6 +47,16 @@ def _write_verdict(sf, verdict="rejected", seed=42):
             bot="scalp", symbol="BTCUSDT", timeframe="4h", strategy="ScalpTrend",
             params_json='{"stop_atr": 2.2}', trades_n=12, win_rate=0.4,
             profit_factor=0.8, sharpe=-0.3, max_dd_pct=-5.0, total_return_pct=-2.0,
+            equity_curve_json=json.dumps(
+                [{"t": "2025-01-01T00:00:00+00:00", "equity": 10000.0},
+                 {"t": "2025-01-02T00:00:00+00:00", "equity": 9950.0}]
+            ),
+            trades_json=json.dumps(
+                [{"entry_time": "2025-01-01T00:00:00+00:00",
+                  "exit_time": "2025-01-02T00:00:00+00:00", "side": "long",
+                  "qty": 0.1, "entry_price": 40000.0, "exit_price": 39500.0,
+                  "pnl": -50.0}]
+            ),
         )
         session.add(run)
         session.flush()
@@ -122,6 +132,36 @@ def test_backtest_run_detail_carries_provenance(client):
     assert body["provenance"]["data_rows"] == 2000
     assert body["params"] == {"stop_atr": 2.2}
     assert body["reasons"] == ["trades 12 < minimum 30"]
+    assert len(body["equity_curve"]) == 2
+    assert body["equity_curve"][0]["t"] == "2025-01-01T00:00:00+00:00"
+    assert body["equity_curve"][1]["equity"] == 9950.0
+    assert len(body["trades"]) == 1
+    trade = body["trades"][0]
+    assert trade["side"] == "long"
+    assert trade["qty"] == 0.1
+    assert trade["entry_price"] == 40000.0
+    assert trade["exit_price"] == 39500.0
+    assert trade["pnl"] == -50.0
+
+
+def test_backtest_run_detail_null_evidence_for_legacy_rows(client):
+    """Runs written before migration c4a1b2d3e5f6 have no evidence columns —
+    the keys must be present and explicitly null, never omitted."""
+    c, sf = client
+    with sf() as session:
+        run = BacktestRun(
+            bot="scalp", symbol="BTCUSDT", timeframe="4h", strategy="ScalpTrend",
+            params_json="{}", trades_n=0, win_rate=0.0,
+            profit_factor=0.0, sharpe=0.0, max_dd_pct=0.0, total_return_pct=0.0,
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+    res = c.get(f"/api/trading/backtest-runs/{run_id}")
+    assert res.status_code == 200
+    body = res.json()
+    assert "equity_curve" in body and body["equity_curve"] is None
+    assert "trades" in body and body["trades"] is None
 
 
 def test_backtest_run_detail_404_for_missing(client):
@@ -186,7 +226,7 @@ RUN_ITEM_KEYS = {
 }
 METRICS_KEYS = {"win_rate", "profit_factor", "sharpe", "max_dd_pct", "total_return_pct"}
 VALIDATION_KEYS = {"permutation_p", "sharpe_ci_lo", "sharpe_ci_hi", "wf_positive_folds", "wf_total_folds"}
-DETAIL_EXTRA_KEYS = {"params", "provenance", "reasons", "prob_positive", "sharpe_actual", "min_trades_required"}
+DETAIL_EXTRA_KEYS = {"params", "provenance", "reasons", "prob_positive", "sharpe_actual", "min_trades_required", "equity_curve", "trades"}
 PROVENANCE_KEYS = {"seed", "data_source", "data_rows", "data_start", "data_end"}
 
 

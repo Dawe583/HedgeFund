@@ -76,6 +76,21 @@ class TradingProvenance(BaseModel):
     data_end: str
 
 
+class TradingEquityPoint(BaseModel):
+    t: str
+    equity: float
+
+
+class TradingTradeEvidence(BaseModel):
+    entry_time: str
+    exit_time: str
+    side: str
+    qty: float
+    entry_price: float
+    exit_price: float
+    pnl: float
+
+
 class TradingRunDetail(TradingRunItem):
     params: dict[str, Any]
     provenance: TradingProvenance | None
@@ -83,3 +98,5 @@ class TradingRunDetail(TradingRunItem):
     prob_positive: float | None
     sharpe_actual: float | None
     min_trades_required: int | None
+    equity_curve: list[TradingEquityPoint] | None
+    trades: list[TradingTradeEvidence] | None

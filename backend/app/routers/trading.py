@@ -233,4 +233,9 @@ def backtest_run_detail(run_id: int, db: Session = Depends(get_trading_db)) -> d
         payload["prob_positive"] = None
         payload["sharpe_actual"] = None
         payload["min_trades_required"] = None
+    # Evidence the run carries (migration c4a1b2d3e5f6; null before it): the
+    # downsampled equity path for the chart and the per-trade fill audit.
+    for key, column in (("equity_curve", "equity_curve_json"), ("trades", "trades_json")):
+        raw = getattr(run, column, None)
+        payload[key] = json.loads(raw) if raw else None
     return payload

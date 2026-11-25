@@ -17,6 +17,9 @@ import Analysis from "./components/Analysis";
 import ChatPanel from "./components/ChatPanel";
 import { Mark } from "./components/Emblem";
 import { CURRENCY_LIST } from "./components/ui";
+import { KeySheet } from "./components/KeySheet";
+import { StatusLine } from "./components/StatusLine";
+import { SECTION_KEYS, readHotkey } from "./components/hotkeys";
 import { correctionAsked, dividendsNote, recordedFor } from "./components/catchUpNote";
 import DividendQuestions, { BANNER_FORMATS } from "./components/DividendQuestions";
 import { recognisedLine, waitingLine } from "./components/dividendQuestion";
@@ -70,16 +73,18 @@ function TabButton({
   onClick: () => void;
   children: ReactNode;
 }) {
-  // Editorial nav: no pills. The active tab is inked and underscored by the
-  // accent rule; the rest recede.
+  // Terminal nav: a tab strip, not a menu. Labels are the monospace data
+  // voice, small, uppercase, letterspaced — the section names are commands,
+  // not titles. The active tab is inked and underscored by the accent rule;
+  // the rest recede into the chrome.
   return (
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={
-        "border-b-2 px-1.5 py-1 text-sm transition " +
+        "border-b-2 px-1.5 py-1 font-mono text-xs uppercase tracking-[0.12em] transition " +
         (active
-          ? "border-olive font-semibold text-ink"
+          ? "border-olive font-medium text-ink"
           : "border-transparent text-ink-soft hover:text-ink")
       }
     >
@@ -87,6 +92,7 @@ function TabButton({
     </button>
   );
 }
+
 
 // The rail: a narrow column on the far left that is always there, and IS the
 // button — the whole strip opens and closes the chat, not a glyph inside it.
@@ -142,10 +148,11 @@ function ChatRail({ open, onToggle }: { open: boolean; onToggle: () => void }) {
         )}
       </span>
       {/* Spelled out at the centre of the strip, reading upward the way a
-          book's spine does, in the display face so it is a name and not a label. */}
+          book's spine does — uppercase mono now, a label on the instrument
+          panel's edge rather than a name in the serif. */}
       <span
         aria-hidden="true"
-        className="font-display text-xl leading-none tracking-wide [writing-mode:vertical-rl] rotate-180"
+        className="font-mono text-sm uppercase leading-none tracking-[0.18em] [writing-mode:vertical-rl] rotate-180"
       >
         {open ? "Close the chat" : "Ask Aurelio"}
       </span>
@@ -239,6 +246,10 @@ export default function App() {
   // Bumped when an answer in the banner writes to the ledger, so the page in
   // view is mounted again and reads what was written.
   const [ledgerVersion, setLedgerVersion] = useState(0);
+  // The key sheet, and the digit keys that are the terminal's way between
+  // sections. Both live up here because the sections do: the sheet is the
+  // frame's documentation of its own wiring (hotkeys.ts — pure, tested).
+  const [sheetOpen, setSheetOpen] = useState(false);
   /* The codes the rate feed quotes, offered to every currency box in the app
      (`CURRENCY_LIST`). Fetched once here rather than per form: `<datalist>` is
      referenced by document id, so one element serves inputs anywhere in the
@@ -388,6 +399,32 @@ export default function App() {
     });
   }, []);
 
+  /* The terminal's keyboard layer. One document-level listener, and the
+     decisions are hotkeys.ts's pure ones: digits go to sections in the
+     strip's order, `?` toggles the sheet, Escape closes it — and every key
+     is dead while the focus is anywhere text is entered, which is what the
+     chat's box, the forms and the pickers are. The listener depends on
+     nothing mutable: it reads keys, never state, and the state setters are
+     stable by React's guarantee. */
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const hot = readHotkey(e.key, e.target, e.ctrlKey, e.metaKey, e.altKey);
+      if (hot === null) return;
+      if (hot.kind === "sheet") {
+        e.preventDefault();
+        setSheetOpen((o) => !o);
+      } else if (hot.kind === "escape") {
+        setSheetOpen(false);
+      } else {
+        e.preventDefault();
+        setReading(null);
+        setTab(SECTION_KEYS[hot.index - 1]);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     // Panel and page side by side. The page column is `min-w-0` so the tables
     // inside it can scroll horizontally in their own cards instead of forcing
@@ -414,7 +451,7 @@ export default function App() {
         onOpenRun={(id) => fromChat(() => setReading(id))}
         onOpenAnalyses={() => fromChat(() => setReading("list"))}
       />
-      <div className="min-w-0 flex-1">
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
         {pacResult && (
           <PacBanner
             result={pacResult}
@@ -444,13 +481,15 @@ export default function App() {
         )}
         <header className="border-b border-rule bg-surface">
           <div
-            className={"flex flex-wrap items-baseline gap-x-8 gap-y-2 px-6 py-4 " + measure}
+            className={"flex flex-wrap items-baseline gap-x-8 gap-y-2 px-6 py-3 " + measure}
           >
             {/* One ink, mark and name alike: beside the tinted rail a second
-                accent on the mark was one colour too many. */}
+                accent on the mark was one colour too many. The wordmark is
+                the mono voice uppercase now — a terminal names itself on its
+                frame, it does not sign itself. */}
             <span className="flex items-center gap-2.5 text-ink">
-              <Mark size={26} accent="currentColor" />
-              <span className="font-display text-2xl leading-none tracking-wide text-ink">
+              <Mark size={22} accent="currentColor" />
+              <span className="font-display text-lg font-medium uppercase leading-none tracking-[0.22em] text-ink">
                 Aurelio
               </span>
             </span>
@@ -471,7 +510,14 @@ export default function App() {
           </div>
         </header>
 
-        <main key={ledgerVersion} className={"px-6 py-8 " + measure}>
+        {/* `w-full` beside `mx-auto` is load-bearing at narrow widths, not
+            redundancy: in a column flex container an auto cross-axis margin
+            demotes align-stretch to flex-start, and the main column would
+            size to its widest content (a blotter table, ~700px) instead of
+            the window — measured at 390px, where the page overflowed by
+            almost a full screen. A definite width keeps stretch out of it:
+            the box is the window's width capped by the measure, centred. */}
+        <main key={ledgerVersion} className={"w-full min-w-0 flex-1 px-6 py-8 " + measure}>
           {reading !== null ? (
             <Analysis
               runId={reading === "list" ? null : reading}
@@ -524,6 +570,21 @@ export default function App() {
             </>
           )}
         </main>
+
+        {/* The status line — the terminal's frame furniture: where you are,
+            the engine's state as a lamp and a word (real backend state,
+            polled), the time, and the way into the key sheet. `mt-auto` pins
+            it to the viewport's bottom edge on short pages; `sticky bottom-0`
+            keeps it in view under long ones. */}
+        <StatusLine
+          section={
+            reading !== null
+              ? "Analysis"
+              : (TABS.find((t) => t.key === tab)?.label ?? tab)
+          }
+          onOpenSheet={() => setSheetOpen((o) => !o)}
+        />
+        {sheetOpen && <KeySheet onClose={() => setSheetOpen(false)} />}
       </div>
     </div>
   );

@@ -53,8 +53,29 @@ export function Blotter({
   // a ref: reading a ref during render is a lint error under the React
   // compiler rules, and useState is exactly "compute once per instance".
   const [name] = useState(() => `blotter-${nextTableId++}`);
+  // The host div, so the viewer element's `theme` attribute can follow the
+  // app's own theme. The React wrapper forwards no attribute for it, and
+  // leaving the grid on Perspective's light-dark() default would follow the
+  // OS — wrong for an app whose dark face is a product decision, not the
+  // system's.
+  const hostRef = useRef<HTMLDivElement | null>(null);
 
   const rowsEmpty = rows.length === 0;
+
+  // "Pro Dark"/"Pro Light" are Perspective's own dense professional themes —
+  // the terminal genre the rest of the page wears, in the grid's own dialect.
+  useEffect(() => {
+    const paint = () => {
+      const viewer = hostRef.current?.querySelector("perspective-viewer");
+      if (!viewer) return;
+      const dark = document.documentElement.getAttribute("data-theme") !== "light";
+      viewer.setAttribute("theme", dark ? "Pro Dark" : "Pro Light");
+    };
+    paint();
+    const observer = new MutationObserver(paint);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, [ready]);
 
   // The engine worker, booted once per page through the lazy module — and
   // only when there is anything to show.
@@ -163,6 +184,7 @@ export function Blotter({
        tall — present in the DOM, invisible on the page. The spike's CSS did
        the same thing one level up. */
     <div
+      ref={hostRef}
       style={{ height }}
       className="overflow-hidden rounded-sm border border-rule bg-surface [&_perspective-viewer]:h-full"
     >

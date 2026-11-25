@@ -6,10 +6,15 @@ import { localDay } from "./calendarDays";
 
 // Shared UI building blocks + style constants, reused across feature tabs.
 
-// Direction "Editoriale": crisp 1px edges, warm surfaces, olive accent.
-// No soft shadows: depth comes from hairlines, as in the design specimen.
-// The exception is what floats above the page (the instrument picker's list,
-// a "?"'s panel), where a hairline alone cannot say which surface is on top.
+// Direction "Terminal" (2026-11-26, successor to "Editoriale"): square
+// instrument surfaces, hairline rules, the olive accent as chrome. Cards are
+// panels now — square-cornered, because a terminal's surfaces butt against
+// each other and rounding is upholstery. Inputs and buttons keep the last
+// hair of rounding (rounded-sm): a control the finger presses can keep a
+// soft edge without breaking the scan. No soft shadows: depth comes from
+// hairlines. The exception is what floats above the page (the instrument
+// picker's list, a "?"'s panel), where a hairline alone cannot say which
+// surface is on top.
 //
 // `max-w-full`: a box is never wider than what holds it. A width class sets
 // what it wants; on a phone the container wins. At 390 Profile's select kept
@@ -18,8 +23,8 @@ import { localDay } from "./calendarDays";
 export const inputClass =
   "max-w-full rounded-sm border border-rule bg-surface px-3 py-2 text-sm outline-none transition focus:border-olive focus:ring-1 focus:ring-olive";
 export const btnClass =
-  "rounded-sm bg-olive px-4 py-2 text-sm font-medium tracking-wide text-on-accent transition hover:bg-olive-deep disabled:opacity-50";
-export const cardClass = "rounded-sm border border-rule bg-surface";
+  "rounded-sm bg-olive px-4 py-2 font-mono text-sm font-medium tracking-wide text-on-accent transition hover:bg-olive-deep disabled:opacity-50";
+export const cardClass = "border border-rule bg-surface";
 
 /* The id of the one `<datalist>` of currency codes, rendered once in the app
    shell and referenced by every currency box through `list=`. Shared here
@@ -132,12 +137,12 @@ export const mdComponents: Components = {
   ),
   code: ({ node: _n, ...p }) => <code className="rounded bg-tint px-1 py-0.5 font-mono text-[13px]" {...p} />,
   pre: ({ node: _n, ...p }) => (
-    <pre className="my-3 overflow-x-auto rounded-sm bg-ink p-3 text-xs text-ground [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-ground" {...p} />
+    <pre className="my-3 overflow-x-auto rounded-sm border border-hair bg-tint p-3 font-mono text-xs text-ink [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-ink" {...p} />
   ),
   hr: ({ node: _n, ...p }) => <hr className="my-4 border-rule" {...p} />,
   table: ({ node: _n, ...p }) => (
     <div className="my-3 overflow-x-auto">
-      <table className="w-full border-collapse text-left text-sm" {...p} />
+      <table className="w-full border-collapse text-left text-xs" {...p} />
     </div>
   ),
   th: ({ node: _n, ...p }) => <th className="border-b border-rule py-1.5 pr-4 font-semibold text-ink" {...p} />,
@@ -394,10 +399,19 @@ export function Section({
   explain?: Explain;
   children: ReactNode;
 }) {
-  const heading = <h2 className="font-display text-2xl leading-tight text-ink">{title}</h2>;
+  // A terminal panel title, not a page heading: the monospace voice,
+  // uppercase, letterspaced, SMALL — on a desk the eye finds panels by
+  // position and scan pattern, not by size. The hairline under the header
+  // row is the panel's top edge; what fills the row to the right of the
+  // title is the panel's own chrome (the aside).
+  const heading = (
+    <h2 className="font-display text-sm font-medium uppercase leading-tight tracking-[0.16em] text-ink">
+      {title}
+    </h2>
+  );
   return (
-    <div className="space-y-4">
-      <div className="space-y-1">
+    <div className="space-y-3">
+      <div className="space-y-1.5 border-b border-hair pb-2">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4">
           {explain ? (
             <div className="flex items-center gap-2">
@@ -409,13 +423,14 @@ export function Section({
           )}
           {aside}
         </div>
-        {hint && <p className="max-w-[68ch] text-sm text-ink-soft">{hint}</p>}
+        {hint && <p className="max-w-[68ch] text-xs leading-relaxed text-ink-soft">{hint}</p>}
         {note && <p className="max-w-[76ch] text-xs text-ink-faint">{note}</p>}
       </div>
       {children}
     </div>
   );
 }
+
 
 export function RowsOrEmpty({
   loading,

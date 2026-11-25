@@ -111,7 +111,7 @@ function ChartCard({
     <section className={cardClass + " p-5"}>
       <header className="mb-5 flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h3 className="font-display text-xl leading-tight text-ink">{title}</h3>
+          <h3 className="font-display text-sm font-medium uppercase leading-tight tracking-[0.14em] text-ink">{title}</h3>
           {subtitle && <p className="mt-0.5 text-xs text-ink-soft">{subtitle}</p>}
         </div>
         <div className="flex shrink-0 gap-3 text-[0.65rem] uppercase tracking-wider">
@@ -256,7 +256,7 @@ function Meter({ ratio }: { ratio: number | null }) {
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className={cardClass + " p-5"}>
-      <h3 className="mb-5 font-display text-xl leading-tight text-ink">{title}</h3>
+      <h3 className="mb-4 font-display text-sm font-medium uppercase leading-tight tracking-[0.14em] text-ink">{title}</h3>
       {children}
     </section>
   );
@@ -321,33 +321,98 @@ export default function Dashboard() {
   const delta = series.length > 1 ? last.net_worth - first.net_worth : null;
   const hasData = summary.net_worth !== 0 || series.length > 0;
 
+  /* The series' own extrema — the high and the low the reader's wealth has
+     actually printed, with their dates carried in the title. No invented
+     metrics: these are read off the same series the chart draws, and a high
+     means exactly what the tape says it means. */
+  let high: NetWorthPoint | null = null;
+  let low: NetWorthPoint | null = null;
+  for (const p of series) {
+    if (high === null || p.net_worth > high.net_worth) high = p;
+    if (low === null || p.net_worth < low.net_worth) low = p;
+  }
+
   return (
     <div className="space-y-10">
-      {/* Hero figure + the components it is made of. */}
-      <section className="space-y-7">
-        <div>
-          <p className="text-[0.65rem] font-medium uppercase tracking-[0.14em] text-ink-soft">
+      {/* The hero, as a terminal header block: the one figure a desk reads
+          first, in the data voice at display size, and underneath it a dense
+          statistical strip — change over the recorded window, the tape's high
+          and low, what the figure is made of — every cell a fact the payloads
+          carry, in mono columns separated by hairlines. Nothing editorial:
+          this is the page's instrument panel, not its headline. */}
+      <section>
+        <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
+          <p className="w-full font-mono text-[0.65rem] font-medium uppercase tracking-[0.14em] text-ink-soft sm:w-auto">
             Net worth
           </p>
-          <div className="mt-1.5 flex flex-wrap items-baseline gap-x-5 gap-y-1">
-            <span className="font-display text-5xl leading-none text-ink sm:text-6xl">
-              {inSummary.format(summary.net_worth)}
+          <span className="font-display text-5xl leading-none tracking-tight text-ink sm:text-6xl">
+            {inSummary.format(summary.net_worth)}
+          </span>
+          {delta != null && delta !== 0 && (
+            <span
+              className={"font-mono text-sm tabular-nums " + (delta > 0 ? "text-up" : "text-down")}
+              title={`Change over the recorded window, ${fmtFull(first.date)} to ${fmtFull(last.date)}`}
+            >
+              {delta > 0 ? "▲ +" : "▼ −"}
+              {money(last.base_currency).format(Math.abs(delta))}
             </span>
-            {delta != null && delta !== 0 && (
-              <span className={"text-sm " + (delta > 0 ? "text-up" : "text-down")}>
-                {delta > 0 ? "+" : "−"}
-                {money(last.base_currency).format(Math.abs(delta))} since {fmtFull(first.date)}
-              </span>
-            )}
-          </div>
-          <p className="mt-2 text-xs text-ink-faint">
-            {summary.as_of ? `Latest data ${fmtFull(summary.as_of)} · ` : ""}
-            {summary.institutions} institutions · {summary.real_assets} real assets ·{" "}
-            {summary.liabilities} debts
-          </p>
+          )}
         </div>
 
-        <div className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
+        {/* The statistical strip: one hairline-ruled row, cells divided by
+            hairlines, each figure mono over its label. On a narrow window the
+            row folds into two columns, which is what a strip does — it never
+            scrolls, because every figure in it is the reader's own money. */}
+        <dl className="mt-5 grid grid-cols-2 border-y border-hair sm:grid-cols-4">
+          {[
+            {
+              label: "Window",
+              value: series.length > 1 ? `${fmtDay(first.date)} – ${fmtDay(last.date)}` : "—",
+              title: series.length > 1 ? `${fmtFull(first.date)} to ${fmtFull(last.date)}` : "The series has one point",
+              tone: "text-ink",
+            },
+            {
+              label: "High",
+              value: high ? inSummary.format(high.net_worth) : "—",
+              title: high ? `Printed ${fmtFull(high.date)}` : undefined,
+              tone: "text-ink",
+            },
+            {
+              label: "Low",
+              value: low ? inSummary.format(low.net_worth) : "—",
+              title: low ? `Printed ${fmtFull(low.date)}` : undefined,
+              tone: "text-ink",
+            },
+            {
+              label: "As of",
+              value: summary.as_of ? fmtDay(summary.as_of) : "—",
+              title: summary.as_of
+                ? `Latest data ${fmtFull(summary.as_of)} · ${summary.institutions} institutions · ${summary.real_assets} real assets · ${summary.liabilities} debts`
+                : "No data date",
+              tone: "text-ink",
+            },
+          ].map((cell, i) => (
+            <div
+              key={cell.label}
+              title={cell.title}
+              className={
+                "px-3 py-2 " +
+                (i > 0 ? "border-l border-hair " : "") +
+                // In the two-column fold the third cell starts a new row and
+                // its separator would be a stray rule mid-panel; at sm it is
+                // back in line.
+                (i === 2 ? "border-l-0 sm:border-l " : "")
+              }
+            >
+              <dt className="font-mono text-[0.6rem] uppercase tracking-[0.14em] text-ink-faint">
+                {cell.label}
+              </dt>
+              <dd className={"mt-0.5 font-mono text-sm tabular-nums " + cell.tone}>{cell.value}</dd>
+            </div>
+          ))}
+        </dl>
+
+        <div className="mt-6 grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
           <StatCard
             label="Investments"
             value={inSummary.format(summary.investments_total)}
@@ -369,6 +434,7 @@ export default function Dashboard() {
           />
         </div>
       </section>
+
 
       {/* Right under the figure it qualifies: net worth is smaller than it was
           and no line says why. The Dashboard is where that difference has to be

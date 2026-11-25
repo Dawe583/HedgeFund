@@ -69,7 +69,13 @@ function Badge({ tone, children, title }: { tone: BadgeTone; children: string; t
   );
 }
 
-/* ---- Engine status header ---------------------------------------------- */
+/* ---- Engine status strip ------------------------------------------------
+
+   The terminal's instrument strip, not a banner: one hairline-framed row
+   that reads like a panel header — the status LAMP first (a terminal's
+   lights are small and square, not round jewels), then the state readout in
+   the mono voice, then the counters it can vouch for. The strip is flush
+   with the page: full-bleed instrument furniture, no card rounding. */
 
 function EngineHeader({ status, error }: { status: TradingStatus | null; error: string | null }) {
   // The backend failing to answer is read as unreachable, not offline — the
@@ -82,16 +88,23 @@ function EngineHeader({ status, error }: { status: TradingStatus | null; error: 
       : tone === "warn"
         ? "border-rule bg-warn-tint"
         : "border-rule bg-surface";
-  const dot = tone === "up" ? "bg-up" : tone === "warn" ? "bg-warn" : "bg-ink-faint";
+  const lamp = tone === "up" ? "bg-up" : tone === "warn" ? "bg-warn" : "bg-ink-faint";
   return (
-    <div className={"rounded-sm border px-4 py-3 " + surface}>
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className={"inline-block h-2 w-2 rounded-full " + dot} aria-hidden="true" />
-        <span className="text-sm text-ink">{reading.line}</span>
+    <div className={"border-l-2 border-y border-r px-3 py-2 " + surface}>
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono">
+        <span className="flex items-center gap-2">
+          <span className={"inline-block h-2.5 w-2.5 " + lamp} aria-hidden="true" />
+          <span className="text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint">Engine</span>
+        </span>
+        <span className="text-xs text-ink">{reading.line}</span>
         {status && error === null && (
-          <span className="text-xs text-ink-soft">
-            · {status.strategies_registered} strategies registered · {status.validations_total}{" "}
-            validations on record
+          <span className="ml-auto flex flex-wrap gap-x-4 text-[0.7rem] uppercase tracking-[0.12em] text-ink-soft">
+            <span>
+              Strategies <span className="tabular-nums text-ink">{status.strategies_registered}</span>
+            </span>
+            <span>
+              Validations <span className="tabular-nums text-ink">{status.validations_total}</span>
+            </span>
           </span>
         )}
       </div>
@@ -170,7 +183,7 @@ export function RunDetail({ id }: { id: number }) {
         {Object.keys(detail.params).length === 0 ? (
           <p className="mt-1 text-sm text-ink-soft">No parameters recorded.</p>
         ) : (
-          <dl className="mt-1 space-y-0.5 text-sm">
+          <dl className="mt-1 space-y-0.5 font-mono text-xs">
             {Object.entries(detail.params).map(([k, v]) => (
               <div key={k} className="flex justify-between gap-3">
                 <dt className="text-ink-soft">{k}</dt>
@@ -189,7 +202,7 @@ export function RunDetail({ id }: { id: number }) {
         {!detail.provenance ? (
           <p className="mt-1 text-sm text-ink-soft">No provenance — the validation gate never ran on this backtest.</p>
         ) : (
-          <dl className="mt-1 space-y-0.5 text-sm">
+          <dl className="mt-1 space-y-0.5 font-mono text-xs">
             {PROVENANCE_LABELS.map(([key, label]) => {
               const provenance = detail.provenance;
               const value = provenance ? provenance[key] : null;
@@ -217,7 +230,7 @@ export function RunDetail({ id }: { id: number }) {
           </dl>
         )}
         <h4 className={statLabelClass + " mt-4"}>Metrics</h4>
-        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs">
           {(Object.keys(detail.metrics) as (keyof RunMetrics)[]).map((k) => (
             <MetricFigure key={k} k={k} v={detail.metrics[k]} />
           ))}
@@ -282,20 +295,28 @@ function ResearchSection({ runs, error }: { runs: BacktestRun[] | null; error: s
   }
 
   const sorted = runsNewestFirst(runs);
+  /* The table and the detail are separate surfaces: the table scrolls
+     horizontally inside its card on narrow windows (that is what the card's
+     overflow is FOR), and a detail nested inside it would inherit the
+     scrollport's column width — measured at 390px, where the run's evidence
+     was clipped to the label column with every value scrolled out of reach.
+     So the open detail renders BELOW the card, full-width, visually docked
+     to the table it expands by the row's hairline and the shared tint. */
   return (
-    <div className={cardClass + " overflow-x-auto"}>
-      <table className="w-full border-collapse text-sm">
+    <>
+      <div className={cardClass + " overflow-x-auto"}>
+      <table className="w-full border-collapse text-xs">
         <thead>
           <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
-            <th className="px-3 py-2 text-left font-medium">Strategy</th>
-            <th className="px-3 py-2 text-left font-medium">Symbol</th>
-            <th className="px-3 py-2 text-left font-medium">TF</th>
-            <th className="px-3 py-2 text-left font-medium">Started</th>
-            <th className="px-3 py-2 text-right font-medium">Trades</th>
-            <th className="px-3 py-2 text-right font-medium">Permutation p</th>
-            <th className="px-3 py-2 text-right font-medium">Sharpe CI</th>
-            <th className="px-3 py-2 text-right font-medium">WF folds</th>
-            <th className="px-3 py-2 text-left font-medium">Verdict</th>
+            <th className="px-3 py-1.5 text-left font-medium">Strategy</th>
+            <th className="px-3 py-1.5 text-left font-medium">Symbol</th>
+            <th className="px-3 py-1.5 text-left font-medium">TF</th>
+            <th className="px-3 py-1.5 text-left font-medium">Started</th>
+            <th className="px-3 py-1.5 text-right font-medium">Trades</th>
+            <th className="px-3 py-1.5 text-right font-medium">Permutation p</th>
+            <th className="px-3 py-1.5 text-right font-medium">Sharpe CI</th>
+            <th className="px-3 py-1.5 text-right font-medium">WF folds</th>
+            <th className="px-3 py-1.5 text-left font-medium">Verdict</th>
           </tr>
         </thead>
         <tbody>
@@ -305,58 +326,82 @@ function ResearchSection({ runs, error }: { runs: BacktestRun[] | null; error: s
             return (
               <Fragment key={r.id}>
                 <tr
+                  data-run-row
+                  tabIndex={0}
+                  aria-expanded={openId === r.id}
                   onClick={() => setOpenId(openId === r.id ? null : r.id)}
-                  className="cursor-pointer border-b border-hair last:border-b-0 hover:bg-olive-tint/40"
+                  onKeyDown={(e) => {
+                    /* The research record is a blotter, and a blotter is
+                       operated by keys: ↑/↓ walk the rows (the DOM holds
+                       them, expansion rows included — querySelector's list
+                       is the truth), Enter opens the detail the click
+                       would. Space does NOT toggle: on a tr it scrolls,
+                       and a scroll that looks like nothing happened is the
+                       worst keyboard trap. */
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      setOpenId(openId === r.id ? null : r.id);
+                    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                      e.preventDefault();
+                      const rows = Array.from(
+                        e.currentTarget.closest("tbody")?.querySelectorAll("[data-run-row]") ?? [],
+                      );
+                      const at = rows.indexOf(e.currentTarget);
+                      const next = rows[at + (e.key === "ArrowDown" ? 1 : -1)];
+                      if (next instanceof HTMLElement) next.focus();
+                    }
+                  }}
+                  className="cursor-pointer border-b border-hair last:border-b-0 hover:bg-olive-tint/40 focus:bg-olive-tint/40"
                 >
-                  <td className="px-3 py-1.5 text-ink">{r.bot}</td>
-                  <td className="px-3 py-1.5 text-ink">{r.symbol}</td>
-                  <td className="px-3 py-1.5 text-ink-soft">{r.timeframe}</td>
-                  <td className="px-3 py-1.5 text-ink-soft">{fmtDay(r.started_at)}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums text-ink" title={provenance}>
+                  <td className="px-3 py-1 text-ink">{r.bot}</td>
+                  <td className="px-3 py-1 text-ink">{r.symbol}</td>
+                  <td className="px-3 py-1 text-ink-soft">{r.timeframe}</td>
+                  <td className="px-3 py-1 text-ink-soft">{fmtDay(r.started_at)}</td>
+                  <td className="px-3 py-1 text-right tabular-nums text-ink" title={provenance}>
                     {r.trades_count}
                   </td>
                   {r.validation ? (
                     <>
-                      <td className="px-3 py-1.5 text-right tabular-nums text-ink" title={provenance}>
+                      <td className="px-3 py-1 text-right tabular-nums text-ink" title={provenance}>
                         {fmtP(r.validation.permutation_p)}
                       </td>
-                      <td className="px-3 py-1.5 text-right tabular-nums text-ink" title={provenance}>
+                      <td className="px-3 py-1 text-right tabular-nums text-ink" title={provenance}>
                         {fmtCi(r.validation.sharpe_ci_lo, r.validation.sharpe_ci_hi)}
                       </td>
-                      <td className="px-3 py-1.5 text-right tabular-nums text-ink" title={provenance}>
+                      <td className="px-3 py-1 text-right tabular-nums text-ink" title={provenance}>
                         {fmtFolds(r.validation.wf_positive_folds, r.validation.wf_total_folds)}
                       </td>
                     </>
                   ) : (
                     <td
                       colSpan={3}
-                      className="px-3 py-1.5 text-right text-ink-faint"
+                      className="px-3 py-1 text-right text-ink-faint"
                       title={`${provenance} · the validation gate never ran on this backtest`}
                     >
                       —
                     </td>
                   )}
-                  <td className="px-3 py-1.5">
+                  <td className="px-3 py-1">
                     <Badge tone={badge.tone} title={provenance}>
                       {badge.label}
                     </Badge>
                   </td>
                 </tr>
-                {openId === r.id && (
-                  <tr className="border-b border-hair bg-ground/60">
-                    <td colSpan={9} className="px-3">
-                      <RunDetail id={r.id} />
-                    </td>
-                  </tr>
-                )}
               </Fragment>
             );
           })}
         </tbody>
       </table>
-    </div>
+      </div>
+      {openId !== null && (
+        <div className="border border-t-0 border-rule bg-ground/60 px-4">
+          <RunDetail id={openId} />
+        </div>
+      )}
+    </>
   );
 }
+
 
 /* ---- The strategies registry ------------------------------------------- */
 
@@ -378,29 +423,47 @@ function StrategiesSection({
       </EmptyState>
     );
   }
+  /* The registry as a terminal roster: one hairline-ruled table, not cards —
+     the columns line up (name, window, symbols, state) because what a desk
+     does with a registry is SCAN it for the one row that changed. */
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      {strategies.map((s) => (
-        <div key={s.key} className={cardClass + " p-4"}>
-          <div className="flex items-baseline justify-between gap-3">
-            <h3 className="font-display text-lg leading-tight text-ink">{s.name}</h3>
-            {s.registered ? (
-              <Badge tone="up">Registered</Badge>
-            ) : (
-              <Badge tone="muted" title="Ported as code for research only — no capital, no orders. Registration is a gate decision, not a default.">
-                Research only
-              </Badge>
-            )}
-          </div>
-          <p className="mt-1 text-xs text-ink-soft">
-            {s.timeframe} · {s.symbols.join(", ")}
-          </p>
-          <p className="mt-2 text-sm text-ink-soft">{s.description}</p>
-        </div>
-      ))}
+    <div className={cardClass + " overflow-x-auto"}>
+      <table className="w-full border-collapse text-xs">
+        <thead>
+          <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
+            <th className="px-3 py-1.5 text-left font-medium">Key</th>
+            <th className="px-3 py-1.5 text-left font-medium">Name</th>
+            <th className="px-3 py-1.5 text-left font-medium">TF</th>
+            <th className="px-3 py-1.5 text-left font-medium">Symbols</th>
+            <th className="px-3 py-1.5 text-left font-medium">Description</th>
+            <th className="px-3 py-1.5 text-left font-medium">State</th>
+          </tr>
+        </thead>
+        <tbody>
+          {strategies.map((s) => (
+            <tr key={s.key} className="border-b border-hair last:border-b-0">
+              <td className="px-3 py-1 text-ink-soft">{s.key}</td>
+              <td className="px-3 py-1 text-ink">{s.name}</td>
+              <td className="px-3 py-1 text-ink-soft">{s.timeframe}</td>
+              <td className="px-3 py-1 text-ink">{s.symbols.join(", ")}</td>
+              <td className="max-w-[40ch] px-3 py-1 text-ink-soft">{s.description}</td>
+              <td className="px-3 py-1">
+                {s.registered ? (
+                  <Badge tone="up">Registered</Badge>
+                ) : (
+                  <Badge tone="muted" title="Ported as code for research only — no capital, no orders. Registration is a gate decision, not a default.">
+                    Research only
+                  </Badge>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
+
 
 /* ---- The page ------------------------------------------------------------ */
 
@@ -430,7 +493,7 @@ export default function Trading() {
   }, []);
 
   return (
-    <div className="space-y-12">
+    <div className="space-y-8">
       <EngineHeader status={status} error={statusError} />
 
       <Section

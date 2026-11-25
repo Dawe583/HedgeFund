@@ -3,11 +3,22 @@
 /* ============================================================
    Typefaces — self-hosted: the app runs locally, so it must not
    depend on a font CDN at runtime. Two subsets per family (latin +
-   latin-ext) so international names render correctly. 97 kB total.
+   latin-ext) so international names render correctly.
+
+   Direction "Terminal" (2026-11-26) made the monospace face the
+   primary voice and retired the serif entirely: IBM Plex Mono at 400
+   (the data voice — every number, every label, every heading) and 500
+   (structural emphasis — panel titles, the tab strip), with Archivo
+   surviving only as the proportional face for sentences of prose,
+   where a measure of monospaced text is genuinely harder to read.
+   IBM Plex Mono rather than JetBrains Mono for the same reason the
+   accent is olive: the institutional voice — tighter, denser, drawn
+   for data at small sizes — over the more distinctive developer one.
+   ~112 kB total across the six files.
    ============================================================ */
 @font-face {
-  font-family: "Instrument Serif";
-  src: url("/fonts/instrument-serif-latin.woff2") format("woff2");
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin.woff2") format("woff2");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -16,9 +27,29 @@
     U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
-  font-family: "Instrument Serif";
-  src: url("/fonts/instrument-serif-latin-ext.woff2") format("woff2");
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin-ext.woff2") format("woff2");
   font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin-ext-500.woff2") format("woff2");
+  font-weight: 500;
   font-style: normal;
   font-display: swap;
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
@@ -46,51 +77,72 @@
     U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* ============================================================
-   Design tokens — direction "Editoriale" (warm bone ground, olive
-   accent, high-contrast serif display) with the ruled-ledger table
-   treatment for dense views. Change a value here and the whole app
-   follows: no colour literals live in the components.
 
-   Contrast of each text token, measured in Edge on every text over what is
-   actually under it (WCAG AA is 4.5:1), on the bone ground and on the darkest
-   fill the pages paint it on:
+/* ============================================================
+   Design tokens — direction "Terminal" (2026-11-26), successor to
+   "Editoriale". A professional multi-asset trading terminal: dense,
+   dark-first, chrome-free, the eye scanning columns rather than cards.
+   Change a value here and the whole app follows: no colour literals
+   live in the components.
+
+   What the direction changes:
+   · DARK IS THE PRODUCT. The dark theme is the default a first paint
+     wears (theme.ts: nothing stored reads as dark, not as the system);
+     the light theme survives as the paper-reading mode — same tokens,
+     same voices, same density — because the contrast harness covers
+     both and a terminal that cannot be read in daylight is a toy.
+   · TYPE DOES THE BRANDING. The serif is gone. IBM Plex Mono is the
+     structural voice: every number, timestamp, label, table and panel
+     title. Archivo recedes to sentences of prose and nothing else.
+   · COLOUR IS INFORMATION. up/down/warn carry meaning and nothing else
+     does; the accent (the olive, lifted into a phosphor-adjacent khaki
+     for the dark ground) is chrome — focus rings, primary buttons, the
+     single-series line — never a state.
+   · DENSITY IS THE INTERFACE. Hairline rules, tight rows, small caps
+     labels at 0.65rem, no marketing whitespace. Panels are instrument
+     surfaces, not cards.
+
+   Contrast of each text token, measured over what is actually under it
+   (WCAG AA is 4.5:1; tests/contrast.test.ts reads this file and holds
+   every pair there). Light theme, on the bone ground and the darkest
+   fill the pages paint it on — UNCHANGED from Editoriale, the light
+   values were already at AA and the redesign moves type and density,
+   not the paper palette:
    ink 17.4, 15.9 on the olive tint · ink-soft 5.1, 4.7 on the warn tint ·
    ink-faint 4.9, 4.5 on the warn tint · olive 6.0, 5.5 on the olive tint ·
    up 7.6, 6.9 on its tint · down 5.7, 5.1 on its tint · warn 5.1 on the
-   surface (no state measured paints it on the ground), 4.5 on the warn tint ·
-   the white on a primary button 6.4.
+   surface, 4.5 on the warn tint · the white on a primary button 6.4.
 
-   Brief AY (2026-10-15) moved three of them, as little as AA took: each to
-   the nearest colour that reads 4.5 on every fill it is painted on.
-   ink-faint #757063 to #726d60: on the warn tint 4.31 to 4.50, on the tint
-   4.33 to 4.53, on the paid-before notice's olive at 5% 4.35 to 4.54.
-   warn #8a6a2b to #86692a: on the warn tint 4.39 to 4.51, as far from down
-   as before.
-   up #47624c to #195a46, so a gain is not the accent's colour: 2.7 apart
-   from the olive in OKLab (x100), now 8.1, as far as the dark theme keeps
-   them; 7.6 on the ground, 6.9 on its tint.
-   tests/contrast.test.ts reads this file and holds every pair at 4.5.
-
-   The dark theme (the block after this one) gives the same tokens values
-   designed for an espresso ground, not inverted: the grounds rise in
-   lightness as they come forward (page, panel, quiet fill), the ink is a
-   warm bone, and every colour that carries meaning is lifted until it reads
-   at 4.5:1 or more on the lightest dark fill. Each text token against the
-   dark ground and the dark surface:
-   ink 13.4 / 12.5 · ink-soft 6.6 / 6.1 · ink-faint 5.9 / 5.5 ·
-   olive 6.8 / 6.3 · up 8.3 / 7.7 · down 6.9 / 6.4 · warn 8.7 / 8.1
-   (all pass WCAG AA; the lowest on any dark fill is ink-faint on the warn
-   tint, 4.7). Text on the accent reads 6.8 on the dark olive's buttons, and
-   the open rail's ink 8.0 on its own deep olive.
+   Dark theme (the block after this one), recomputed for the terminal
+   ground — near-black with a warm tint, not pure #000, because pure
+   black halos bright text on OLED and LCD alike and a terminal is
+   stared at for hours. Ground #12100c, surface #181511, tint #1f1b16,
+   the grounds rising in lightness as they come forward. Each text
+   token against the dark ground and the dark surface:
+   ink 15.0 / 14.4 · ink-soft 7.2 / 6.9 · ink-faint 5.6 / 5.4 ·
+   olive 11.2 / 10.7 · up 10.4 / 10.0 · down 7.8 / 7.5 · warn 10.4 / 10.0.
+   The lowest pair on any dark fill is ink-faint on the warn tint, 4.7 —
+   ink-faint sits exactly at the edge the light theme taught: quiet
+   enough to recede, never below AA. Text on the accent reads 11.0 on
+   the dark olive's buttons, and the open rail's ink 9.6 on its own
+   deep olive. up/olive stand 9.0 apart in OKLab (x100): the gain's
+   phosphor green cannot be mistaken for the khaki chrome.
    ============================================================ */
 /* `static` matters: Tailwind v4 tree-shakes theme variables that no utility
    class references, and several of these are consumed as `var(--color-…)`
    from the chart components (SVG stroke/fill). Without `static` those
    variables silently vanish from the build and the marks lose their colour. */
 @theme static {
+  /* Three voices, not two. `mono` is the data voice and the default for
+     everything numeric or structural; Tailwind's own `font-mono` utility
+     reads this variable, so it reaches the code spans and pickers that
+     already use it. `display` is the same face at structural weight —
+     panel titles, the wordmark, the tab strip — kept as a separate token
+     because a heading is a role, not a typeface. `sans` is prose only:
+     paragraphs, explanations, the chat's own sentences. */
   --font-sans: "Archivo", system-ui, "Segoe UI", sans-serif;
-  --font-display: "Instrument Serif", Georgia, "Times New Roman", serif;
+  --font-display: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* grounds */
   --color-ground: #faf8f3; /* page */
@@ -130,10 +182,8 @@
      all six checks PASS on both the adjacent and the all-pairs pairlists
      (worst all-pairs CVD ΔE 8.3 protan, normal-vision 16.3, contrast ≥ 3:1).
      Their dark steps (the dark block) keep the three hues, lifted into the
-     dark band, and pass every check of the same checker with --mode dark,
-     against the dark surface #2A241E and the dark ground #231E19, on both
-     pairlists (worst all-pairs CVD ΔE 8.9 deutan, normal-vision 16.2,
-     contrast ≥ 3:1).
+     dark band. On the terminal's darker surface the contrast can only rise;
+     the hues are unchanged.
      Data marks carry more chroma than the UI chrome on purpose: the muted
      chrome hues measured below the 0.10 chroma floor, i.e. they read as grey
      and stop telling series apart. Single-series charts use the olive accent
@@ -165,64 +215,74 @@
 }
 
 /* ============================================================
-   The dark theme: the colour tokens again, for an espresso ground.
-   `data-theme` on the root says which theme a page wears. index.html sets it
-   before the first paint, from the reader's choice kept in this browser or
-   from the system's preference (components/theme.ts holds the rule), and
-   themeRoot.ts keeps it in step. The light values above are never touched.
+   The dark theme — the product's own face, and the default a first
+   paint wears. `data-theme` on the root says which theme a page is in:
+   index.html sets it before the first paint, from the reader's choice
+   kept in this browser, DEFAULTING TO DARK when nothing was ever chosen
+   (components/theme.ts holds the rule; a terminal-first product does not
+   ask the OS for permission to be itself). The light values above are
+   never touched.
 
-   `color-scheme: dark` makes the browser draw its own parts for a dark page:
-   a date's calendar icon, a number's spin buttons, a select's open list, a
-   datalist's suggestions, the scrollbars. The mark's gold is the same in
-   both themes.
+   The palette is designed for the warm near-black, not inverted: the
+   grounds rise in lightness as they come forward, the ink is a warm
+   phosphor bone, and every colour that carries meaning is lifted until
+   it reads at 4.5:1 or more on every fill the pages paint it on — the
+   measurements are in the comment over the light block. The semantic
+   hues are the terminal's own: green up, red down, amber warn, and the
+   olive accent lifted into khaki chrome that none of them collides with.
+
+   `color-scheme: dark` makes the browser draw its own parts for a dark
+   page: a date's calendar icon, a number's spin buttons, a select's open
+   list, a datalist's suggestions, the scrollbars. The mark's gold is the
+   same in both themes.
    ============================================================ */
 @layer base {
   :root[data-theme="dark"] {
     color-scheme: dark;
 
-    --color-ground: #231e19;
-    --color-surface: #2a241e;
-    --color-tint: #322b24;
+    --color-ground: #12100c;
+    --color-surface: #181511;
+    --color-tint: #1f1b16;
 
-    --color-ink: #eee7da;
-    --color-ink-soft: #aca394;
-    --color-ink-faint: #a3998a;
+    --color-ink: #ebe4d4;
+    --color-ink-soft: #a89e8c;
+    --color-ink-faint: #948b78;
     --color-placeholder: var(--color-ink-faint);
 
-    --color-hair: #3f382f;
-    --color-rule: #554b40;
+    --color-hair: #2b2620;
+    --color-rule: #463e33;
 
-    --color-olive: #a1ab7c;
-    --color-olive-deep: #c0ca9e;
-    --color-olive-tint: #2d2f24;
+    --color-olive: #c3cc8f;
+    --color-olive-deep: #d6dfae;
+    --color-olive-tint: #24231a;
 
-    --color-up: #7ac7a2;
-    --color-up-tint: #233229;
-    --color-down: #e39383;
-    --color-down-tint: #3b2721;
-    --color-warn: #e8b36f;
-    --color-warn-tint: #3a2f1f;
+    --color-up: #6fd3a0;
+    --color-up-tint: #16281f;
+    --color-down: #ee8b79;
+    --color-down-tint: #2e1b17;
+    --color-warn: #e5b96e;
+    --color-warn-tint: #2b2115;
 
     --color-chart-1: #5386d3;
     --color-chart-2: #bf8532;
     --color-chart-3: #af609f;
 
-    --color-on-accent: #231e19;
+    --color-on-accent: #14120c;
 
     /* A deep olive, near the closed rail's: the lifted olive over a whole
        strip would be the one pale block beside the dark page. */
-    --color-rail: #40462a;
-    --color-rail-deep: #4d5337;
+    --color-rail: #33381f;
+    --color-rail-deep: #41482c;
     --color-rail-ink: var(--color-ink);
 
-    /* A black at 10% does not show on an espresso ground. */
+    /* A black at 10% does not show on a near-black ground. */
     --color-shadow: #00000066;
   }
 
   /* The question in an empty box, in both themes: the placeholder token.
      Tailwind's own placeholder is the ink at 50%, which falls below 4.5:1 on
-     either surface (3.5 on the light one); the faint ink reads 5.1 on the
-     light surface and 5.5 on the dark. */
+     either surface; the faint ink reads 5.1 on the light surface and 5.4 on
+     the dark. */
   ::placeholder {
     color: var(--color-placeholder);
   }
@@ -238,11 +298,56 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Money and quantities must line up in columns. */
+  /* Money and quantities must line up in columns — and in a terminal they
+     are set in the monospace voice outright: a table is scanned, not read,
+     and its prose is labels, which mono handles better than sans does.
+     tabular-nums is belt-and-braces for the fallback faces. */
   table,
   th,
   td {
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* The blotter grids (Perspective web components) speak the same mono
+     voice: the datagrid's cells inherit their host element's font-family,
+     and --psp-interface-monospace--font-family is what its own mono readouts
+     use. The theme attribute itself is set by Blotter.tsx, following the
+     app's data-theme rather than the OS. */
+  perspective-viewer {
+    font-family: var(--font-mono) !important;
+    --psp-interface-monospace--font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    /* Terminal row density: the datagrid's rows measure themselves off this
+       one variable (td/th height and the line-height inside them both read
+       it, with two different stale fallbacks — 19px and 23px — when it is
+       unset). 18px is the desk grade: a visible scan rhythm without the row
+       collapsing into its own separators. */
+    --psp-datagrid--row--height: 18px;
+    /* Colour is information, and the grid is part of the terminal: positive
+       cells wear the app's own up phosphor, negative the down coral — never
+       Perspective's financial-blue convention, which would put a second
+       meaning system on the page. The background joins the warm near-black
+       instead of the Pro theme's cool panel grey. !important is deliberate
+       and measured, not a habit: Perspective's own themes declare these very
+       variables on perspective-viewer[theme=…] — a selector more specific
+       than anything honest we can write — so an ordinary declaration always
+       loses, and the only override that reads as what it is, is the explicit
+       one. */
+    --psp-datagrid--pos-cell--color: var(--color-up) !important;
+    --psp-datagrid--neg-cell--color: var(--color-down) !important;
+  }
+
+  :root[data-theme="dark"] perspective-viewer {
+    --psp--background-color: #181511 !important;
+  }
+
+  /* The viewer's own tab strip — the "untitled" bar with the row counters —
+       is workspace chrome for multi-panel layouts. A blotter here is exactly
+       one table on one panel, so the strip is 26px of furniture that says
+       nothing the page doesn't already say better. It lives in the light
+       DOM (slotted), so a plain rule reaches it. */
+  perspective-viewer-tab {
+    display: none;
   }
 
   /* Keyboard focus stays visible everywhere (the olive ring is the accent). */

@@ -51,7 +51,10 @@ export function EquityChart({
       layout: {
         background: { color: "transparent" },
         textColor: cssToken("--color-ink-soft", "#6f6a5f"),
-        fontSize: 11,
+        fontSize: 10,
+        // The axis numbers are data, and data speaks mono: a price scale in
+        // a proportional face is a newspaper's chart, not a terminal's.
+        fontFamily: "'IBM Plex Mono', ui-monospace, Menlo, monospace",
       },
       grid: {
         vertLines: { color: cssToken("--color-hair", "#e5e0d4") },

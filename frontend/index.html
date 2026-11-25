@@ -5,7 +5,9 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- The theme, before the first paint: the reader's choice kept in this
-         browser, or the system's preference. The rule is
+         browser — and dark when nothing was ever chosen, dark being the
+         product's own face ("Terminal", 2026-11-26). Only "light" paints
+         light outright; only "system" follows the OS. The rule is
          src/components/theme.ts's, and tests/theme.test.ts runs this very
          script against it. Plain script with no import, so it runs before
          the stylesheet and the app's own code. -->
@@ -17,11 +19,13 @@
         } catch (refused) {
           choice = null;
         }
+        var systemDark =
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches;
         var dark =
           choice === "dark" ||
-          (choice !== "light" &&
-            typeof window.matchMedia === "function" &&
-            window.matchMedia("(prefers-color-scheme: dark)").matches);
+          (choice !== "light" && choice !== "system") ||
+          (choice === "system" && systemDark);
         document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
       })();
     </script>

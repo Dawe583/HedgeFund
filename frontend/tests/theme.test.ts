@@ -1,11 +1,13 @@
-/* Which theme a page is painted in (brief AX).
+/* Which theme a page is painted in (brief AX; the default dark, "Terminal"
+   2026-11-26).
 
    The rule is components/theme.ts's: the reader's choice kept in this
-   browser, or the system's preference. index.html runs the same rule in its
-   own few lines of plain script before the first paint, and nothing but this
-   test keeps the two equal: the script here is index.html's own, run in a
-   sandbox with a stand-in for the browser. Every expected value is written
-   out. */
+   browser — and dark when nothing was ever chosen, dark being the product's
+   own face. Only "light" paints light outright; only "system" follows the
+   OS. index.html runs the same rule in its own few lines of plain script
+   before the first paint, and nothing but this test keeps the two equal:
+   the script here is index.html's own, run in a sandbox with a stand-in for
+   the browser. Every expected value is written out. */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -21,15 +23,17 @@ import {
 
 // What the browser keeps (null: nothing; "refused": a storage that throws on
 // a read, as a blocked one does) -> the theme on a light system, on a dark one.
+// Anything but "light" or "system" is dark whatever the OS: the product's
+// default, and "dark" itself.
 const TABLE: [string | null, "light" | "dark", "light" | "dark"][] = [
-  [null, "light", "dark"],
+  [null, "dark", "dark"],
   ["light", "light", "light"],
   ["dark", "dark", "dark"],
   ["system", "light", "dark"],
-  ["", "light", "dark"],
-  ["Dark", "light", "dark"],
-  ["blue", "light", "dark"],
-  ["refused", "light", "dark"],
+  ["", "dark", "dark"],
+  ["Dark", "dark", "dark"],
+  ["blue", "dark", "dark"],
+  ["refused", "dark", "dark"],
 ];
 
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
@@ -59,17 +63,17 @@ function painted(stored: string | null, systemDark: boolean): string | undefined
   return root["data-theme"];
 }
 
-test("a stored value reads as the choice, anything else as System", () => {
+test("a stored value reads as the choice, anything else as the dark default", () => {
   assert.equal(readChoice("light"), "light");
   assert.equal(readChoice("dark"), "dark");
-  assert.equal(readChoice(null), "system");
-  assert.equal(readChoice(undefined), "system");
   assert.equal(readChoice("system"), "system");
-  assert.equal(readChoice("Dark"), "system");
-  assert.equal(readChoice(""), "system");
+  assert.equal(readChoice(null), "dark");
+  assert.equal(readChoice(undefined), "dark");
+  assert.equal(readChoice("Dark"), "dark");
+  assert.equal(readChoice(""), "dark");
 });
 
-test("the stored choice wins over the system; with none, the system decides", () => {
+test("the stored choice wins over everything; with none, dark paints", () => {
   for (const [stored, onLight, onDark] of TABLE) {
     const choice = readChoice(stored === "refused" ? null : stored);
     assert.equal(appliedTheme(choice, false), onLight, `stored ${stored}, a light system`);
@@ -94,10 +98,10 @@ test("the Profile offers System, Light and Dark, in that order", () => {
   assert.deepEqual(THEME_CHOICES, ["system", "light", "dark"]);
 });
 
-test("a choice is kept as its word, and System keeps nothing", () => {
+test("a choice is kept as its word, System's included", () => {
   assert.equal(storedValue("light"), "light");
   assert.equal(storedValue("dark"), "dark");
-  assert.equal(storedValue("system"), null);
+  assert.equal(storedValue("system"), "system");
 });
 
 test("what a choice keeps, read back on the next load, is that choice", () => {

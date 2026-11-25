@@ -31,8 +31,8 @@ export default function ThemeSection() {
     <section className={cardClass + " space-y-3 p-5"}>
       <h3 className="text-sm font-semibold text-ink">Theme</h3>
       <p className="text-sm text-ink-soft">
-        How Aurelio looks in this browser. System follows your computer's light or dark
-        setting.
+        How Aurelio looks in this browser. Dark is the default — the terminal's own
+        face; System follows your computer's light or dark setting instead.
       </p>
       <div role="group" aria-label="Theme" className="flex flex-wrap gap-2">
         {THEME_CHOICES.map((c) => (

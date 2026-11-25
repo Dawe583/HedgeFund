@@ -87,6 +87,10 @@ class OpenPosition(Base):
     opened_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     gate_source: Mapped[str] = mapped_column(String(16), default="legacy")
+    # the signal bar's own timestamp — the kernel desk's restart logic
+    # re-derives position age from it; rows from before the kernel migration
+    # don't carry it and are honestly unrecoverable-age, never invented
+    signal_time: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class EquityPoint(Base):

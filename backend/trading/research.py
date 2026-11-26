@@ -152,6 +152,22 @@ def cmd_ingest_funding(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ingest_yahoo(args: argparse.Namespace) -> int:
+    """Multi-asset ingestion through Yahoo Finance — stocks, indexes, metals."""
+    from trading.feeds.yahoo import fetch_yahoo_candles
+
+    rows = fetch_yahoo_candles(args.symbol, args.timeframe, args.days)
+    engine = make_engine(args.db)
+    init_schema(engine)
+    sf = make_session_factory(engine)
+    with sf() as session:
+        inserted = upsert_candles(session, args.symbol.upper(), args.timeframe, rows)
+    engine.dispose()
+    print(json.dumps({"ingested": inserted, "venue": "yahoo", "symbol": args.symbol.upper(),
+                      "timeframe": args.timeframe, "days": args.days, "db": args.db}))
+    return 0
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     inserted, venue = asyncio.run(_ingest(args.symbol, args.timeframe, args.days, args.db))
     print(
@@ -629,6 +645,13 @@ def main(argv: list[str] | None = None) -> int:
     p_fund.add_argument("--days", type=int, default=365)
     p_fund.add_argument("--db", default=DEFAULT_RESEARCH_DB)
     p_fund.set_defaults(fn=cmd_ingest_funding)
+
+    p_yf = sub.add_parser("ingest-yahoo", help="backfill stocks/indexes/metals via Yahoo Finance")
+    p_yf.add_argument("--symbol", required=True)
+    p_yf.add_argument("--timeframe", default="1h")
+    p_yf.add_argument("--days", type=int, default=729)
+    p_yf.add_argument("--db", default=DEFAULT_RESEARCH_DB)
+    p_yf.set_defaults(fn=cmd_ingest_yahoo)
 
     p_val = sub.add_parser("validate", help="backtest + validation gate + verdict row")
     p_val.add_argument("--bot", required=True, choices=sorted(STRATEGIES))

@@ -60,6 +60,13 @@ class FeedHealth:
         self._last_beat = self._clock()
 
     def stale(self) -> bool:
+        return self.stale_for() > self._timeout_s
+
+    def stale_for(self) -> float:
+        """Continuous silence in seconds — inf when the feed never delivered.
+        The watchdog needs the duration, not just the boolean: the restart
+        threshold is a multiple of the staleness timeout, and a feed that
+        never delivered must not read as infinitely overdue at boot."""
         if self._last_beat is None:
-            return True  # a feed that never delivered is stale by definition
-        return (self._clock() - self._last_beat) > self._timeout_s
+            return float("inf")  # a feed that never delivered is stale by definition
+        return self._clock() - self._last_beat

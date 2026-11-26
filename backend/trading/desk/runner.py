@@ -164,6 +164,60 @@ def status_line(desk, started_monotonic: float) -> str:
         }
     return "STATUS " + json.dumps(out)
 
+# The watchdog distinguishes the two dead-feed shapes the soak measured
+# apart. Quotes silent for this long means the wire itself is dead — a
+# partition or a venue outage — and restarting the desk changes nothing,
+# so the watchdog stays its hand. Quotes alive while bars never close is
+# the vendor failure shape: the websocket client reconnects, the
+# fire-and-forget resubscribe silently fails, and the kline stream never
+# comes back. Only a fresh process re-issues the subscription cleanly.
+QUOTE_ALIVE_S = 120.0
+
+
+def feed_watchdog_verdict(desk, started_monotonic: float) -> dict | None:
+    """Decide whether the feed failure shape justifies a process restart.
+
+    Returns a dict describing the first offending bot, or None. The rule:
+
+    - bars silent longer than 2x the staleness timeout (the timeout is
+      already 1.5x the bar interval, so 2x is three bar-intervals of
+      continuous silence — measured against the BOOT for a feed that never
+      delivered, not against infinity),
+    - while this bot's instrument kept delivering quotes within
+      QUOTE_ALIVE_S (the wire is fine — the subscription is what died),
+    - and the desk is past its boot grace of one staleness timeout (a fresh
+      feed is legitimately stale until the first close; on slow tapes that
+      is most of an interval, so the first verdict can only form after the
+      timeout, and the 2x duration requirement does the rest).
+
+    A feed silent because the NETWORK is silent never trips this: quotes
+    die with everything else in a partition, and restarting into a
+    partition just re-seeds into the same dead wire.
+    """
+    quote_beats = getattr(desk, "quote_beats", None) or {}
+    if not quote_beats:
+        return None  # replay/test wiring or pre-tick boot — nothing to judge by
+    now = time.monotonic()
+    if now - started_monotonic < desk.feed_stale_after_s:
+        return None
+    for spec in desk.specs:
+        health = desk.feed_health[spec.bot]
+        silent = health.stale_for()
+        if silent == float("inf"):
+            silent = now - started_monotonic
+        if silent <= 2 * desk.feed_stale_after_s:
+            continue
+        instrument_id = desk.instrument_ids.get(spec.bot)
+        beat = quote_beats.get(instrument_id)
+        if beat is not None and now - beat <= QUOTE_ALIVE_S:
+            return {
+                "bot": spec.bot,
+                "bars_silent_s": round(silent, 1),
+                "last_quote_s": round(now - beat, 1),
+                "stale_after_s": desk.feed_stale_after_s,
+            }
+    return None
+
 def write_heartbeats(desk, running: bool) -> None:
     """One BotStatus row per bot — the /api/trading/status engine lamp reads
     heartbeat recency (HEARTBEAT_ALIVE_S=120, the 60s monitor cadence fits
@@ -320,9 +374,27 @@ def main(argv=None) -> int:
     # latency at seconds — a 60s join would make every shutdown wait out the
     # current tick (measured: 52s from signal to stop with join(60))
     last_status = time.monotonic()
+    watchdog_restart = False
     while t.is_alive() and not shutdown.is_set():
         t.join(timeout=10)
-        if t.is_alive() and not shutdown.is_set() and time.monotonic() - last_status >= 60:
+        if not t.is_alive() or shutdown.is_set():
+            break
+        verdict = feed_watchdog_verdict(desk, started)
+        if verdict is not None:
+            # the subscription-death shape: quotes flowing, bars silent past
+            # every honest excuse. The remediation is a fresh process — the
+            # vendor client offers no resubscribe API that survives its own
+            # failure shape, and kernel surgery on live connection state is
+            # how desks die twice. Exit 3 tells the supervisor why.
+            log.error(
+                "feed watchdog: %s bars silent %.0fs while quotes flowed %.0fs ago "
+                "— subscription death shape, restarting the process",
+                verdict["bot"], verdict["bars_silent_s"], verdict["last_quote_s"],
+            )
+            watchdog_restart = True
+            shutdown.set()
+            break
+        if time.monotonic() - last_status >= 60:
             last_status = time.monotonic()
             print(status_line(desk, started), flush=True)
             write_heartbeats(desk, running=True)
@@ -332,7 +404,9 @@ def main(argv=None) -> int:
     # either way the desk is no longer trading and the supervisor must know
     node_died_unexpectedly = not t.is_alive() and not shutdown.is_set()
 
-    if shutdown.is_set():
+    if watchdog_restart:
+        log.error("watchdog-ordered shutdown — stopping the node for a supervised restart")
+    elif shutdown.is_set():
         log.info("shutdown requested — stopping the node")
     else:
         log.error("node thread ended without a shutdown request")
@@ -346,6 +420,11 @@ def main(argv=None) -> int:
     write_heartbeats(desk, running=False)
     if t.is_alive():
         log.error("node thread survived stop() by 60s — exiting anyway, kernel threads are daemons")
+    if watchdog_restart:
+        # distinct from 0 (clean) and 1 (fatal): the desk was not broken,
+        # its feed was — a supervisor keyed on non-zero exits restarts it,
+        # and the exit code itself is the incident tape
+        return 3
     if node_died_unexpectedly:
         log.error("node thread died without external shutdown — fatal")
         return 1

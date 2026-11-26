@@ -155,7 +155,7 @@ class QuoteFeedBridge:
     cost seconds and the class must exist once per process."""
 
     @staticmethod
-    def make(instrument_ids: list[str]):
+    def make(instrument_ids: list[str], quote_beats: dict[str, float] | None = None):
         from nautilus_trader.common.actor import Actor
         from nautilus_trader.config import ActorConfig
         from nautilus_trader.model.identifiers import InstrumentId
@@ -166,11 +166,26 @@ class QuoteFeedBridge:
             `data.*.{venue}.*` msgbus subscription — this actor's only job
             is to make the DataEngine request them from the venue client.
             Ticks are never transformed, so the bridge is inert in replay:
-            no venue client exists there to answer the subscription."""
+            no venue client exists there to answer the subscription.
+
+            When `quote_beats` is passed, every tick records a monotonic
+            timestamp keyed by instrument id string — the runner's feed
+            watchdog reads it to tell a dead feed (quotes silent, everything
+            silent: a partition, a restart helps nothing) from a dead
+            SUBSCRIPTION (quotes flowing, klines silent: the vendor client's
+            fire-and-forget resubscribe failure shape measured in the
+            2026-11-26 soak). Plain dict writes are GIL-atomic; a one-tick
+            race on a watchdog keyed to minutes of staleness is noise."""
 
             def on_start(self):
                 for id_str in instrument_ids:
                     self.subscribe_quote_ticks(InstrumentId.from_str(id_str))
+
+            def on_quote_tick(self, tick):
+                if quote_beats is not None:
+                    import time as _time
+
+                    quote_beats[str(tick.instrument_id)] = _time.monotonic()
 
         return QuoteBridge(ActorConfig(component_id="quote-feed-bridge"))
 
@@ -228,7 +243,8 @@ def build_production_desk(
         data_config={BINANCE_VENUE: make_data_config(sorted({s.symbol for s in specs}), proxy_url=proxy_url)},
         data_factories={BINANCE_VENUE: BinanceLiveDataClientFactory},
     )
-    desk.node.trader.add_actor(QuoteFeedBridge.make(sorted(instrument_ids.values())))
+    desk.quote_beats = {}
+    desk.node.trader.add_actor(QuoteFeedBridge.make(sorted(instrument_ids.values()), desk.quote_beats))
     return desk
 
 

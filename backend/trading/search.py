@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS search_ledger (
     data_rows INTEGER,
     seed INTEGER NOT NULL,
     reasons_json TEXT NOT NULL,
-    elapsed_s REAL
+    elapsed_s REAL,
+    legs_json TEXT
 )
 """
 
@@ -82,6 +83,11 @@ def open_ledger(db_path: str) -> sqlite3.Connection:
     diary is not."""
     conn = sqlite3.connect(db_path)
     conn.execute(LEDGER_DDL)
+    # additive migration for ledgers written before legs existed — sqlite
+    # errors on duplicate-column ALTER, so the check is the catalog read
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(search_ledger)")}
+    if "legs_json" not in cols:
+        conn.execute("ALTER TABLE search_ledger ADD COLUMN legs_json TEXT")
     conn.commit()
     return conn
 
@@ -91,7 +97,7 @@ def ledger_append(conn: sqlite3.Connection, row: dict) -> int:
         "ts, family, candidate, symbol, timeframe, params_json, phase, verdict,"
         " trades_n, permutation_p, sharpe_ci_lo, wf_positive, wf_total, sharpe,"
         " profit_factor, max_dd_pct, rails, data_start, data_end, data_rows,"
-        " seed, reasons_json, elapsed_s"
+        " seed, reasons_json, elapsed_s, legs_json"
     )
     placeholders = ", ".join("?" for _ in cols.split(","))
     cur = conn.execute(
@@ -167,6 +173,25 @@ def in_sample(df: pd.DataFrame) -> pd.DataFrame:
 
 def out_of_sample(df: pd.DataFrame) -> pd.DataFrame:
     return _window(df, start=OOS_SPLIT)
+
+def load_frame(research_db: str, symbol: str, timeframe: str) -> pd.DataFrame:
+    """The full feature frame for one symbol-timeframe — loaded once per
+    caller, then sliced per phase. Windows lose warm-up history by slicing:
+    the first lookback-worth of in-sample bars can never signal, which is
+    the honest price of the split — recorded in every row's data_start."""
+    from trading.features import build_features
+    from trading.models import make_engine, make_session_factory
+    from trading.research import load_candles_df
+
+    engine = make_engine(research_db)
+    sf = make_session_factory(engine)
+    with sf() as session:
+        raw = load_candles_df(session, symbol.upper(), timeframe)
+    engine.dispose()
+    if raw.empty:
+        raise SystemExit(f"no candles for {symbol} {timeframe} in {research_db} — run ingest first")
+    return build_features(raw)
+
 
 
 def evaluate_candidate(

@@ -24,25 +24,6 @@ import sys
 import pandas as pd
 
 
-def load_frame(research_db: str, symbol: str, timeframe: str) -> pd.DataFrame:
-    """The full feature frame for one symbol-timeframe — loaded once per
-    worker, then sliced per phase. Windows lose warm-up history by slicing:
-    the first lookback-worth of in-sample bars can never signal, which is
-    the honest price of the split — recorded in every row's data_start."""
-    from trading.features import build_features
-    from trading.models import make_engine, make_session_factory
-    from trading.research import load_candles_df
-
-    engine = make_engine(research_db)
-    sf = make_session_factory(engine)
-    with sf() as session:
-        raw = load_candles_df(session, symbol.upper(), timeframe)
-    engine.dispose()
-    if raw.empty:
-        raise SystemExit(f"no candles for {symbol} {timeframe} in {research_db} — run ingest first")
-    return build_features(raw)
-
-
 def evaluate_cell(payload: dict) -> dict:
     """Worker: one candidate on one symbol in one phase. Owns its ledger
     connection because sqlite connections do not cross processes. The
@@ -50,7 +31,7 @@ def evaluate_cell(payload: dict) -> dict:
     and is reconstructed here from the registry."""
     from trading.backtest.engine import BTConfig
     from trading.bots.trend_bot import TrendMomentum
-    from trading.search import Candidate, evaluate_candidate, in_sample, open_ledger, out_of_sample, rails_off_config
+    from trading.search import Candidate, evaluate_candidate, in_sample, load_frame, open_ledger, out_of_sample, rails_off_config
 
     makers = {"trendmom": lambda p: TrendMomentum(**p)}
     make = makers.get(payload["bot_key"])
@@ -62,14 +43,27 @@ def evaluate_cell(payload: dict) -> dict:
         bot_key=payload["bot_key"],
         params=payload["params"],
         make=make,
-        symbols=[payload["symbol"]],
+        symbols=list(payload.get("basket") or [payload["symbol"]]),
         timeframe=payload["timeframe"],
     )
     conn = open_ledger(payload["ledger_path"])
     try:
+        cfg = rails_off_config() if payload["phase"] == "A" else BTConfig()
+        if payload.get("basket"):
+            from trading.basket import evaluate_basket
+
+            row = evaluate_basket(
+                conn,
+                candidate,
+                symbols=payload["basket"],
+                phase=payload["phase"],
+                research_db=payload["research_db"],
+                seed=payload["seed"],
+                cfg=cfg,
+            )
+            return {k: row.get(k) for k in ("id", "candidate", "symbol", "verdict", "trades_n", "permutation_p", "sharpe", "elapsed_s")}
         df = load_frame(payload["research_db"], payload["symbol"], payload["timeframe"])
         window = in_sample(df) if payload["phase"] == "A" else out_of_sample(df)
-        cfg = rails_off_config() if payload["phase"] == "A" else BTConfig()
         row = evaluate_candidate(
             conn,
             candidate,
@@ -91,6 +85,7 @@ def main(argv=None) -> int:
     p.add_argument("--phase", required=True, choices=["A", "B"])
     p.add_argument("--candidates", default=None, help="comma-separated candidate names — default the whole grid")
     p.add_argument("--symbols", default=None, help="override the candidates' symbol lists, comma-separated")
+    p.add_argument("--basket", default=None, help="comma-separated basket symbols — evaluates composites, not per-symbol cells")
     p.add_argument("--jobs", type=int, default=4)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--db", default="sqlite:////Users/dawe/Developer/HedgeFund/backend/data/research.db")
@@ -120,8 +115,28 @@ def main(argv=None) -> int:
     # one file means one backup carries both
     ledger_path = args.db.split("///")[-1] if "///" in args.db else args.db.removeprefix("sqlite:///")
 
+    basket_syms = None
+    if args.basket:
+        basket_syms = sorted(s.strip().upper() for s in args.basket.split(",") if s.strip())
+        if len(basket_syms) < 2:
+            raise SystemExit("a basket of one symbol is a per-symbol evaluation — drop --basket")
+
     cells = []
     for cand in candidates:
+        if basket_syms:
+            cells.append({
+                "family": cand.family,
+                "candidate": cand.name,
+                "bot_key": cand.bot_key,
+                "params": cand.params,
+                "basket": basket_syms,
+                "timeframe": cand.timeframe,
+                "phase": args.phase,
+                "seed": args.seed,
+                "research_db": args.db,
+                "ledger_path": ledger_path,
+            })
+            continue
         for symbol in cand.symbols:
             cells.append({
                 "family": cand.family,
@@ -154,7 +169,8 @@ def main(argv=None) -> int:
                     row = fut.result()
                 except Exception as exc:
                     cell = futures[fut]
-                    row = {"candidate": cell["candidate"].name, "symbol": cell["symbol"],
+                    row = {"candidate": cell["candidate"],
+                           "symbol": cell.get("symbol") or "+".join(cell.get("basket") or []),
                            "verdict": "error", "error": str(exc)}
                 results.append(row)
                 print(json.dumps({"event": "cell", **row}, default=str), flush=True)

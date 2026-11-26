@@ -228,20 +228,51 @@ def validate_core(
 
     records = trades_to_records(result.trades, symbol.upper())
     initial = float(cfg.initial_equity)
+    gate = gate_stats(records, result.equity, initial, seed, bars_per_year, min_trades, len(result.trades))
+    mc = gate["mc"]
+    bs = gate["bs"]
+    wf_pos = gate["wf_pos"]
+    wf_total = gate["wf_total"]
+    p_sharpe = gate["p_sharpe"]
+    n_trades = gate["n_trades"]
+    reasons = gate["reasons"]
+    verdict = gate["verdict"]
+    validation_payload = gate["validation_payload"]
 
+    return {
+        "verdict": verdict,
+        "result": result,
+        "metrics": result.metrics,
+        "df": df,
+        "mc": mc,
+        "bs": bs,
+        "wf_pos": wf_pos,
+        "wf_total": wf_total,
+        "p_sharpe": p_sharpe,
+        "n_trades": n_trades,
+        "reasons": reasons,
+        "validation_payload": validation_payload,
+    }
+
+
+def gate_stats(records, equity, initial, seed, bars_per_year, min_trades, n_trades) -> dict:
+    """The gate over arbitrary trade records and an equity series — the
+    basket path composes its inputs across symbols and still answers to the
+    same statistics. Nothing here knows where the records came from; that
+    provenance belongs to the caller's ledger row."""
     np.random.seed(seed)  # any consumer of the global RNG reproduces
     mc = monte_carlo_test(
         records, initial, n_simulations=N_SIMULATIONS, seed=seed, bars_per_year=bars_per_year
     )
     bs = bootstrap_sharpe_ci(
-        result.equity,
+        equity,
         bars_per_year=bars_per_year,
         n_bootstrap=N_BOOTSTRAP,
         seed=seed,
         initial_capital=initial,
     )
     wf = walk_forward_analysis(
-        result.equity,
+        equity,
         records,
         n_windows=N_WINDOWS,
         bars_per_year=bars_per_year,
@@ -249,7 +280,6 @@ def validate_core(
     )
 
     reasons: list[str] = []
-    n_trades = len(result.trades)
     if n_trades < min_trades:
         reasons.append(f"trades {n_trades} < minimum {min_trades}")
     p_sharpe = mc.get("p_value_sharpe")
@@ -271,12 +301,8 @@ def validate_core(
 
     verdict = "validated" if not reasons else "rejected"
     validation_payload = {"monte_carlo": mc, "bootstrap": bs, "walk_forward": wf}
-
     return {
         "verdict": verdict,
-        "result": result,
-        "metrics": result.metrics,
-        "df": df,
         "mc": mc,
         "bs": bs,
         "wf_pos": wf_pos,

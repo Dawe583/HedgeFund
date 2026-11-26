@@ -132,6 +132,50 @@ async def _ingest(symbol: str, timeframe: str, days: int, db_url: str) -> tuple[
     return (inserted, venue)
 
 
+def cmd_predict(args: argparse.Namespace) -> int:
+    """Forward-return prediction for one symbol: the F9 artifact scored on
+    the latest feature row. Read-only, prints JSON — the honest contract is
+    that a prediction carries its noise scale with it, so the output is
+    never a bare number."""
+    from trading.ml_forecast import artifact_for
+    from trading.search import load_frame
+
+    art = artifact_for(args.symbol.upper(), args.timeframe, args.db)
+    df = load_frame(args.db, args.symbol.upper(), args.timeframe)
+    row = df.iloc[-1]
+    import math
+
+    x = []
+    missing = []
+    for f in art["features"]:
+        v = float(row[f]) if f in row else float("nan")
+        if not math.isfinite(v):
+            missing.append(f)
+        x.append(v)
+    if missing:
+        print(json.dumps({"error": f"features not finite on the last bar: {missing}"}))
+        return 1
+    pred = float(art["model"].predict([x])[0])
+    noise = float(art["noise"])
+    print(
+        json.dumps(
+            {
+                "symbol": args.symbol.upper(),
+                "timeframe": args.timeframe,
+                "bar_close_time": str(df.index[-1]),
+                "horizon_bars": art["horizon"],
+                "predicted_return": round(pred, 6),
+                "noise_rmse": round(noise, 6),
+                "z_score": round(pred / (noise + 1e-12), 3),
+                "oof_corr": round(float(art.get("oof_corr", 0.0)), 4),
+                "trained_through": art.get("trained_through"),
+                "caveat": "out-of-fold corr measures historical skill; a prediction is a measurement, not advice",
+            }
+        )
+    )
+    return 0
+
+
 def cmd_ingest_funding(args: argparse.Namespace) -> int:
     """Funding-rate history ingestion — the F2 family's data plane."""
     import asyncio as _asyncio
@@ -652,6 +696,12 @@ def main(argv: list[str] | None = None) -> int:
     p_yf.add_argument("--days", type=int, default=729)
     p_yf.add_argument("--db", default=DEFAULT_RESEARCH_DB)
     p_yf.set_defaults(fn=cmd_ingest_yahoo)
+
+    p_pred = sub.add_parser("predict", help="forward-return prediction for one symbol (F9 artifact)")
+    p_pred.add_argument("--symbol", required=True)
+    p_pred.add_argument("--timeframe", default="1h")
+    p_pred.add_argument("--db", default=DEFAULT_RESEARCH_DB)
+    p_pred.set_defaults(fn=cmd_predict)
 
     p_val = sub.add_parser("validate", help="backtest + validation gate + verdict row")
     p_val.add_argument("--bot", required=True, choices=sorted(STRATEGIES))

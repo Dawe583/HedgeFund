@@ -14,7 +14,10 @@ def _tape(closes, freq="1h", start="2025-01-01"):
     closes = np.asarray(closes, dtype=float)
     df = pd.DataFrame(index=idx)
     df["close"] = closes
-    df["atr_pct"] = 0.5  # 0.5% of price per bar — quiet but alive
+    df["atr_pct"] = 0.005  # fraction-of-price per bar (0.5%), the real tape's
+    # scale — measured 2026-11-26 on BTCUSDT 1h: mean 0.0067. The original
+    # 0.5 was 100x off, written against the bot's own scaling bug; the bug is
+    # fixed and the fixture now carries honest units.
     return df
 
 

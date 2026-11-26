@@ -65,7 +65,10 @@ class MeanRevRegime(BaseStrategy):
         closes = df["close"].values
         window = closes[i - self.dev_lookback + 1: i + 1]
         mean = float(window.mean())
-        atr_abs = atr_pct * close_now / 100.0
+        atr_abs = atr_pct * close_now  # atr_pct is already a fraction (atr/close), not percent —
+        # the original /100 shrank every ATR 100x and inflated dev_z 100x, so F5/F7/F8
+        # all measured thresholds ~100x tighter than declared (measured 2026-11-26:
+        # |dev_z| >= 1.5 on 99% of OOS bars — impossible for honest ATR units)
         dev_z = (close_now - mean) / atr_abs
 
         # regime: Kaufman efficiency ratio over the regime horizon —

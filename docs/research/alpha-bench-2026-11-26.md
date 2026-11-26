@@ -55,3 +55,18 @@ decorrelated survivors into the kernel. The bench answers "does the alpha
 rank the universe informatively"; the kernel answers "does any of that
 survive execution reality". These are different questions and the program
 has been burned before by confusing them.
+
+
+## Wide-equity re-bench (added the same evening): 24 US names, 1d, horizon 1
+
+**292 measured | 0 alive | 0 reversed** — and this time the universe is not
+the limit: 24 liquid names is a real cross-section. The honest reading
+changes shape: equities carry roughly a QUARTER of crypto's cross-sectional
+information level (mean |IC| 0.005 vs 0.021). 24 alphas reach t-stat > 2
+but none clears mean IC 0.02 — the best is gtja191_111 at +0.0177, t 3.79.
+This is what an efficient large-cap tape looks like in this instrument:
+structure exists, it is just too thin to trade through costs. The crypto
+survivors' decay out-of-sample (F11) and the equity thinness are the same
+sentence read twice: **the easy cross-sectional money in these formulas
+was arbitraged away years ago; what remains is either fast-decaying or
+permanently thin.**

@@ -136,3 +136,41 @@ def continuation_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
 
 
 GRIDS["F7"] = continuation_candidates
+
+
+def catalog_control_candidates(symbols=("BTCUSDT",)) -> list[Candidate]:
+    """F6 — the catalog as-is on 3y data, the cheap control. Same bots,
+    same production parameters, longer tape: separates 'no edge' from 'no
+    edge in 2026's tape'. One candidate per catalog bot at its catalog
+    timeframe — the budget of 16 allows parameter exploration if a bot
+    shows life, but the control itself is four cells, unchanged. scalp's
+    catalog timeframe is 4h; the rest ride the sub-hourly planes the
+    ingest of the same evening added."""
+    from trading.bots.breakout_bot import BreakoutVol
+    from trading.bots.hft_bot import HFTMomentum
+    from trading.bots.meanrev_bot import MeanRev
+    from trading.bots.scalp_bot import ScalpTrend
+
+    specs = [
+        ("scalp", "ScalpTrend", ScalpTrend, "4h"),
+        ("hft", "HFTMomentum", HFTMomentum, "1m"),
+        ("breakout", "BreakoutVol", BreakoutVol, "5m"),
+        ("meanrev", "MeanRev", MeanRev, "15m"),
+    ]
+    out = []
+    for key, cls_name, cls, tf in specs:
+        out.append(
+            Candidate(
+                family="F6-catalog-control",
+                name=f"catalog-{key}-asis",
+                bot_key=key,
+                params={},  # production defaults — control means unchanged
+                make=lambda c=cls: c(),
+                symbols=list(symbols),
+                timeframe=tf,
+            )
+        )
+    return out
+
+
+GRIDS["F6"] = catalog_control_candidates

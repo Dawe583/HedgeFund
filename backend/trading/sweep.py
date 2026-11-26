@@ -43,6 +43,7 @@ def evaluate_cell(payload: dict) -> dict:
     from trading.bots.ml_forecast_bot import MLForecast
     from trading.bots.alpha_signal_bot import AlphaSignal
     from trading.bots.alpha_basket_bot import AlphaBasket
+    from trading.bots.ml_rolling_bot import MLRolling
     from trading.search import Candidate, evaluate_candidate, in_sample, load_frame, open_ledger, out_of_sample, rails_off_config
 
     makers = {
@@ -58,7 +59,16 @@ def evaluate_cell(payload: dict) -> dict:
         "breakout": lambda p: BreakoutVol(**p),
         "meanrev": lambda p: MeanRev(**p),
     }
-    if payload["bot_key"] == "alphabasket":
+    if payload["bot_key"] == "mlrolling":
+
+        def make(p):
+            bot = MLRolling(entry_z=1.0, exit_z=0.5)
+            bot.roll_window = p["window"]
+            bot.roll_cadence = p["cadence"]
+            bot.roll_research_db = payload["research_db"]
+            bot.timeframe = payload["timeframe"]
+            return bot
+    elif payload["bot_key"] == "alphabasket":
         import importlib as _il2
 
         alpha_id = payload["params"]["alpha"]

@@ -460,3 +460,37 @@ def alpha_basket_candidates(symbols=None) -> list[Candidate]:
 
 
 GRIDS["F11"] = alpha_basket_candidates
+
+
+# F12: regime-conditional ML — declared in program-2026-11-26 (budget 16)
+F12_WINDOWS = [2000, 4000]   # training window in bars — 83/166 days at 1h
+F12_CADENCE = [24, 48]       # retrain every N bars — daily / every two days
+
+
+def ml_rolling_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
+    """The F12 grid: window x cadence x 2 symbols = 8 cells x 2 phases = 16.
+    entry_z fixed at 1.0, exit 0.5 — the family's question is retraining,
+    not thresholds, and every parameter that is not the question is noise
+    in the budget."""
+    from trading.bots.ml_rolling_bot import MLRolling
+
+    out = []
+    for window in F12_WINDOWS:
+        for cadence in F12_CADENCE:
+            params = {"window": window, "cadence": cadence}
+            name = f"mlroll-w{window}-c{cadence}"
+            out.append(
+                Candidate(
+                    family="F12-mlrolling",
+                    name=name,
+                    bot_key="mlrolling",
+                    params=params,
+                    make=lambda p: MLRolling(entry_z=1.0, exit_z=0.5),
+                    symbols=list(symbols),
+                    timeframe="1h",
+                )
+            )
+    return out
+
+
+GRIDS["F12"] = ml_rolling_candidates

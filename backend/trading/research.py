@@ -140,8 +140,36 @@ def cmd_predict(args: argparse.Namespace) -> int:
     from trading.ml_forecast import artifact_for
     from trading.search import load_frame
 
-    art = artifact_for(args.symbol.upper(), args.timeframe, args.db)
     df = load_frame(args.db, args.symbol.upper(), args.timeframe)
+    if getattr(args, "rolling", False):
+        from trading.ml_rolling import rolling_predictions_cached
+
+        preds = rolling_predictions_cached(df, args.symbol.upper(), args.timeframe, horizon=6, window=2000, cadence=24)
+        pred = float(preds.iloc[-1])
+        import math as _m
+
+        if not _m.isfinite(pred):
+            print(json.dumps({"error": "no rolling prediction on the last bar — warm-up incomplete"}))
+            return 1
+        hist = preds.dropna()
+        noise = float(hist.std())
+        print(
+            json.dumps(
+                {
+                    "symbol": args.symbol.upper(),
+                    "timeframe": args.timeframe,
+                    "bar_close_time": str(df.index[-1]),
+                    "horizon_bars": 6,
+                    "predicted_return": round(pred, 6),
+                    "pred_std": round(noise, 6),
+                    "z_score": round(pred / (noise + 1e-12), 3),
+                    "model": "rolling w2000 c24 — retrains daily on the trailing 83 days, embargoed",
+                    "caveat": "a prediction is a measurement, not advice",
+                }
+            )
+        )
+        return 0
+    art = artifact_for(args.symbol.upper(), args.timeframe, args.db)
     row = df.iloc[-1]
     import math
 
@@ -701,6 +729,7 @@ def main(argv: list[str] | None = None) -> int:
     p_pred.add_argument("--symbol", required=True)
     p_pred.add_argument("--timeframe", default="1h")
     p_pred.add_argument("--db", default=DEFAULT_RESEARCH_DB)
+    p_pred.add_argument("--rolling", action="store_true", help="use the F12 rolling-regime artifact instead of the frozen F9 one")
     p_pred.set_defaults(fn=cmd_predict)
 
     p_val = sub.add_parser("validate", help="backtest + validation gate + verdict row")

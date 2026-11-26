@@ -155,14 +155,14 @@ function Thought({ text, thinking, answered }: { text: string; thinking: boolean
         type="button"
         onClick={() => setManual(!open)}
         aria-expanded={open}
-        className="inline-flex cursor-pointer items-center gap-1.5 text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint hover:text-ink-soft"
+        className="inline-flex cursor-pointer items-center gap-1.5 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-ink-faint hover:text-ink-soft"
       >
         {thinking && !answered ? <Spinner className="h-3 w-3" /> : null}
         {thinking && !answered ? "Thinking" : "Thoughts"}
         <span aria-hidden="true">{open ? "−" : "+"}</span>
       </button>
       {open && (
-        <div className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap border-l border-hair pl-3 text-xs leading-relaxed text-ink-faint">
+        <div className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap border-l border-hair pl-3 text-xs leading-normal text-ink-faint">
           {text}
         </div>
       )}
@@ -185,7 +185,7 @@ function Thought({ text, thinking, answered }: { text: string; thinking: boolean
 function ToolNote({ block, running }: { block: ChatToolBlock; running: boolean }) {
   return (
     <div className="my-2 border-l border-hair pl-3">
-      <p className="flex items-baseline gap-2 text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint">
+      <p className="flex items-baseline gap-2 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-ink-faint">
         {running ? <Spinner className="h-3 w-3" /> : null}
         <span>{running ? "Consulting" : "Consulted"}</span>
         <span className="normal-case tracking-normal text-ink-soft">{block.name}</span>
@@ -210,7 +210,7 @@ function Sources({ block }: { block: ChatSourcesBlock }) {
   if (heading === null) return null;
   return (
     <div className="my-2 border-l border-hair pl-3">
-      <p className="text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint">
+      <p className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-ink-faint">
         {heading.words}
         {heading.query !== null && (
           <span className="break-words normal-case tracking-normal text-ink-soft">
@@ -256,7 +256,7 @@ const ANALYZER = "run_analysis";
 function Steps({ steps, running }: { steps: ChatStepEvent[]; running: boolean }) {
   return (
     <div className="my-2 border-l border-hair pl-3">
-      <p className="flex items-baseline gap-2 text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint">
+      <p className="flex items-baseline gap-2 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-ink-faint">
         {running ? <Spinner className="h-3 w-3" /> : null}
         <span>{workHeading(steps[0]?.tool, running)}</span>
       </p>
@@ -265,7 +265,7 @@ function Steps({ steps, running }: { steps: ChatStepEvent[]; running: boolean })
           <li key={s.step_no} className="flex items-baseline gap-2 text-xs text-ink-soft">
             <span className="text-ink-faint">{s.step_no}.</span>
             <span className="min-w-0 flex-1">{s.label}</span>
-            <span className="tnum shrink-0 text-ink-faint">
+            <span className="shrink-0 font-mono text-ink-faint">
               {(s.duration_ms / 1000).toFixed(1)}s
             </span>
           </li>
@@ -281,7 +281,7 @@ function Fields({ rows }: { rows: [string, string][] }) {
       {rows.map(([k, v]) => (
         <Fragment key={k}>
           <dt className="text-ink-faint">{k}</dt>
-          <dd className="tnum text-ink">{v}</dd>
+          <dd className="font-mono text-ink">{v}</dd>
         </Fragment>
       ))}
     </dl>

@@ -512,14 +512,14 @@ export default function Dashboard() {
                 tickMargin={8}
                 tickLine={false}
                 stroke="var(--color-rule)"
-                tick={{ fontSize: 11, fill: "var(--color-ink-soft)" }}
+                tick={{ fontSize: 10, fill: "var(--color-ink-soft)", fontFamily: "var(--font-mono)" }}
               />
               <YAxis
                 tickFormatter={(v) => compact.format(Number(v))}
                 width={52}
                 tickLine={false}
                 axisLine={false}
-                tick={{ fontSize: 11, fill: "var(--color-ink-soft)" }}
+                tick={{ fontSize: 10, fill: "var(--color-ink-soft)", fontFamily: "var(--font-mono)" }}
               />
               <Tooltip
                 content={(p) => <SeriesTooltip {...(p as unknown as TipProps)} />}
@@ -533,7 +533,7 @@ export default function Dashboard() {
                 strokeLinejoin="round"
                 strokeLinecap="round"
                 fill="var(--color-olive)"
-                fillOpacity={0.1}
+                fillOpacity={0.04}
                 dot={false}
                 activeDot={{
                   r: 4,
@@ -592,16 +592,23 @@ export default function Dashboard() {
           <Panel title="Monthly cash flow">
             <div className="space-y-5">
               <div className="grid grid-cols-3 gap-x-5">
-                <StatCard label="Income" value={money(cash.base_currency).format(cash.monthly_income)} valueClass="text-up" />
+{/* Zero is "nothing yet", not a gain or a loss: the sign colours
+                    belong to non-zero magnitudes alone, so a row of zeros
+                    reads neutral instead of red-green. */}
+                <StatCard
+                  label="Income"
+                  value={money(cash.base_currency).format(cash.monthly_income)}
+                  valueClass={cash.monthly_income === 0 ? "text-ink-faint" : "text-up"}
+                />
                 <StatCard
                   label="Expenses"
                   value={money(cash.base_currency).format(cash.monthly_expenses)}
-                  valueClass="text-down"
+                  valueClass={cash.monthly_expenses === 0 ? "text-ink-faint" : "text-down"}
                 />
                 <StatCard
                   label="Net"
                   value={money(cash.base_currency).format(cash.monthly_net)}
-                  valueClass={cash.monthly_net >= 0 ? "text-ink" : "text-down"}
+                  valueClass={cash.monthly_net === 0 ? "text-ink-faint" : cash.monthly_net > 0 ? "text-ink" : "text-down"}
                 />
               </div>
               <Meter ratio={cash.savings_rate} />

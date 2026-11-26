@@ -355,6 +355,55 @@
     outline: 2px solid var(--color-olive);
     outline-offset: 2px;
   }
+
+  /* ...everywhere EXCEPT a focused table row. A terminal's answer to focus
+     is reverse video, not a ring: the whole row inverts against the accent,
+     and a solid cursor bar marks the row's leading edge — the phosphor
+     idiom, where selection is light on dark, never a drawn rectangle.
+     Semantics survive it because they are in the column, not the row: the
+     tint stays translucent enough that up-coral/down-phosphor and the verdict
+     badges keep their own ground and meaning. */
+  tr:focus-visible {
+    outline: none;
+    background-color: color-mix(in oklab, var(--color-olive) 55%, var(--color-ground));
+  }
+  tr:focus-visible td:first-child,
+  tr:focus-visible th:first-child {
+    box-shadow: inset 3px 0 0 var(--color-olive);
+  }
+  /* The viewer's own CSS is injected at runtime, AFTER every stylesheet the
+     page owns — so for anything the themes declare as a plain declaration on
+     the host, the page can only answer !important (measured: theme style tag
+     index 1, ours index 0). What those rules cover, decoded from the pixels:
+     - pro-dark.css paints the host itself a literal cool #242526 behind the
+       grid's cells: the gutters, the header fill, the zebra negative space.
+     - --psp-inactive--color/-border-color feed the header text tint and the
+       column separators — baked cool greys (#61656e/#4c505b) that read as a
+       blue monitor inside a warm phosphor terminal.
+     - the zebra is color-mix of the text color: with --psp--color white it
+       is a white veil, wrong direction for a scanline. Re-declared here as
+       the page's own hairline, which IS the scanline's colour. */
+  perspective-viewer,
+  /* ...and the children, non-negotiably: the theme's own selector is the
+     descendant `perspective-viewer [theme=Pro Dark]` — it declares the cool
+     values ON the datagrid element itself, so a custom property inherited
+     from the host never even gets to compete (a direct declaration beats
+     inheritance regardless of importance). Measured: the datagrid's
+     --psp--background-color read #242526 while the host's read the warm
+     #181511, one element apart. The theme declares nothing !important, so
+     importance here is the whole game — specificity never enters it. */
+  perspective-viewer perspective-viewer-datagrid,
+  perspective-viewer perspective-viewer-datagrid-toolbar {
+    background-color: #181511 !important;
+    --psp--background-color: #181511 !important;
+    --psp-inactive--color: var(--color-ink-soft) !important;
+    --psp-inactive--border-color: var(--color-rule) !important;
+    /* The active colour is the sort indicator's arrow and the column-menu
+       hover — the last pixel of Perspective's monitor-blue in the grid.
+       On this desk "active" is the accent's job, and the accent is olive. */
+    --psp-active--color: var(--color-olive) !important;
+    --psp-datagrid--zebra--color: color-mix(in oklab, var(--color-hair) 45%, transparent);
+  }
 }
 
 @layer utilities {

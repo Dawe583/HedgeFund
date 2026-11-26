@@ -202,12 +202,23 @@ export default function CashFlow({
       {summary && (
         <div>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <StatCard label="Monthly income" value={money(summary.base_currency).format(summary.monthly_income)} valueClass="text-up" />
-            <StatCard label="Monthly expenses" value={money(summary.base_currency).format(summary.monthly_expenses)} valueClass="text-down" />
+            {/* Zero is "nothing yet", not a gain or a loss — the same rule
+                Portfolio's toneClass and the dashboard's cash cards follow:
+                the sign colours belong to non-zero magnitudes alone. */}
+            <StatCard
+              label="Monthly income"
+              value={money(summary.base_currency).format(summary.monthly_income)}
+              valueClass={summary.monthly_income === 0 ? "text-ink-faint" : "text-up"}
+            />
+            <StatCard
+              label="Monthly expenses"
+              value={money(summary.base_currency).format(summary.monthly_expenses)}
+              valueClass={summary.monthly_expenses === 0 ? "text-ink-faint" : "text-down"}
+            />
             <StatCard
               label="Monthly net"
               value={money(summary.base_currency).format(summary.monthly_net)}
-              valueClass={summary.monthly_net >= 0 ? "text-ink" : "text-down"}
+              valueClass={summary.monthly_net === 0 ? "text-ink-faint" : summary.monthly_net > 0 ? "text-ink" : "text-down"}
             />
             <StatCard label="Savings rate" value={pct(summary.savings_rate)} valueClass="text-olive" explain={SAVINGS_RATE} />
           </div>

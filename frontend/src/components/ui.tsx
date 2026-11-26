@@ -21,9 +21,14 @@ import { localDay } from "./calendarDays";
 // the width of its longest option and widened the page to 418, and the
 // situation form's name box crossed its card by 35px (brief AU).
 export const inputClass =
-  "max-w-full rounded-sm border border-rule bg-surface px-3 py-2 text-sm outline-none transition focus:border-olive focus:ring-1 focus:ring-olive";
+  // Terminal density for operator entry: the field is one line of console,
+  // not a web form's padded rectangle. Mono because what goes into these
+  // fields is data — amounts, ISINs, dates, institution names a desk
+  // types the way it types a ticker. py-1.5/text-xs matches the tables
+  // the entries end up in.
+  "max-w-full rounded-sm border border-rule bg-surface px-2 py-1.5 font-mono text-xs outline-none transition focus:border-olive focus:ring-1 focus:ring-olive";
 export const btnClass =
-  "rounded-sm bg-olive px-4 py-2 font-mono text-sm font-medium tracking-wide text-on-accent transition hover:bg-olive-deep disabled:opacity-50";
+  "rounded-sm bg-olive px-3 py-1.5 font-mono text-xs font-medium tracking-wide text-on-accent transition hover:bg-olive-deep disabled:opacity-50";
 export const cardClass = "border border-rule bg-surface";
 
 /* The id of the one `<datalist>` of currency codes, rendered once in the app
@@ -467,6 +472,7 @@ export function Row({
   note,
   badge,
   value,
+  monoTitle,
 }: {
   onClick?: () => void;
   onEdit?: () => void;
@@ -493,6 +499,10 @@ export function Row({
   note?: string | null;
   badge?: string | null;
   value?: string;
+  /** True when the row's title IS a datum — a date, a timestamp, a figure —
+      and so speaks in the monospace voice. Rows named by their thing (an
+      institution, an expense's wording) keep the proportional one. */
+  monoTitle?: boolean;
 }) {
   /* The name says what the row is, so it is never cut: it wraps. And it keeps
      at least 10rem: a row too narrow for that beside its figure and badge puts
@@ -502,7 +512,7 @@ export function Row({
   const content = (
     <>
       <div className="min-w-0 grow basis-40">
-        <div className="break-words font-medium text-ink">{title}</div>
+        <div className={"break-words font-medium text-ink" + (monoTitle ? " font-mono" : "")}>{title}</div>
         {subtitle && <div className="truncate text-xs text-ink-soft">{subtitle}</div>}
         {detail && <div className="text-xs text-ink-faint">{detail}</div>}
       </div>

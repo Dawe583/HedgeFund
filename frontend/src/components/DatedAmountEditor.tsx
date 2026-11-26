@@ -123,6 +123,7 @@ export function DatedAmountEditor<T extends { id: number; note: string | null },
       key={i.id}
       onEdit={() => ed.startEdit(i)}
       onDelete={() => void ed.destroy(i)}
+      monoTitle
       title={dateOf(i)}
       subtitle={subtitleOf?.(i)}
       note={i.note}

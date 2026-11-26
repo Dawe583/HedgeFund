@@ -855,7 +855,7 @@ They will be reported as unaccounted for, not removed in silence.
       )}
       <RowsOrEmpty loading={loading} error={error} empty={items.length === 0} emptyText="No situations yet.">
         {items.map((s) => (
-          <Row key={s.id} onClick={() => onSelect(s)} onDelete={() => remove(s)} title={s.date} note={s.note} value={money(s.base_currency).format(s.value_base)} />
+          <Row key={s.id} onClick={() => onSelect(s)} onDelete={() => remove(s)} monoTitle title={s.date} note={s.note} value={money(s.base_currency).format(s.value_base)} />
         ))}
       </RowsOrEmpty>
     </Section>
@@ -918,7 +918,7 @@ function SituationDetail({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="space-y-4">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-lg font-semibold text-ink">Situation: {snapshot.date}</h2>
+        <h2 className="font-mono text-lg font-medium text-ink">Situation: {snapshot.date}</h2>
         <span className="text-sm text-ink-soft">
           Total <span className="font-semibold text-ink">{money(baseCurrency).format(total)}</span>
         </span>

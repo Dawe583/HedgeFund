@@ -90,9 +90,12 @@ export default function Records({
             onClick={() => onPage(p.key)}
             aria-current={p.key === page ? "page" : undefined}
             className={
-              "-mb-2 border-b-2 pb-2 text-sm transition " +
+              // The terminal voice: a sub-strip is the same instrument as the
+              // shell's own tab strip, one level down — mono, uppercase, tracked,
+              // and the active one underlined by the accent rule, never bolded.
+              "-mb-2 border-b-2 pb-2 font-mono text-xs uppercase tracking-[0.1em] transition " +
               (p.key === page
-                ? "border-olive font-semibold text-ink"
+                ? "border-olive font-medium text-ink"
                 : "border-transparent text-ink-soft hover:text-ink")
             }
           >

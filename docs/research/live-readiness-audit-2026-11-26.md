@@ -234,31 +234,40 @@ names that as the line-crossing failure mode.
    consistency, ≥30 trades — the gate is enforced in code (`registry.py`:
    transitions impossible without the verdict rows). Nothing else on this
    list matters until this is true.
-2. **Soak verdict.** pending — verdict due ~2026-11-27 00:37 UTC, soak doc
-   docs/research/soak-2026-11-26.md. The soak adds: 24h of `missed_bars = 0`
-   continuity evidence on two tapes (4h production-realistic, 1m density),
-   restart/rearm behavior if any, heartbeat reliability, feed-stale
-   semantics at production interval, and — critically — the first real
-   sample of live fills (the 1m scalp process fired its first entry 90 s
-   after boot: `fills 1, open_position true` at 00:33).
+2. **Soak verdict — in, truncated** (updated 2026-11-26 evening, soak doc
+   docs/research/soak-2026-11-26.md final section). The 24h window did not
+   complete: an external host reboot killed both desks at 17.3 h, and the
+   pre-registry `--bot` CLI no longer exists, so the truncated run cannot
+   be extended. What the window proved: zero missed bars, zero heartbeat
+   failures, partitions survived by reconnect+backfill, 7 honest losing
+   trades on the 1m tape. What it exposed — the more valuable output:
+   live klines silently dead for hours behind healthy-looking reconnects,
+   with detection (feed_stale) but no remediation. The feed watchdog now
+   closes that: quotes-alive-plus-bars-silent past 2x the staleness
+   timeout restarts the process (exit 3), quotes-dead-with-everything
+   (partition) never does. What is still missing: a full uninterrupted
+   24h window on the registry-driven runner — meaningful only once the
+   roster is non-empty, i.e. after item 1.
 3. **Order-path evidence at scale.** Today n=2 live fills, both perfect
    (smoke §8b). `divergence.py` refuses statistics below 30 trades per side
    for the correct reason. Close: the divergence budget's instruments
    reading a month-scale paper sample of a strategy that actually trades —
    fill deviation per role in ticks, entry lag distribution, then the same
    instruments on the real adapter (item 5).
-4. **Mandate machinery armed + signoff.** Status: partially built, never
-   armed. The halt sentinel rail exists and is enforced in the harness at
-   entry and rearm (`rails.py` rail 4, fail-closed, corrupt-file-halts);
-   the manual kill-switch row and approval-card flow exist (M4); the
-   `candidate_live → live` transition is structurally impossible today —
-   `registry.py` raises unconditionally: "requires a mandate (M5), which
-   does not exist". Mandate rows themselves, the order-guard chain, and the
-   append-only hash-chained audit ledger are not yet implemented. Close:
-   the design's M5 acceptance — the machinery demonstrably blocks a
-   violating order in tests even with every software layer above bypassed
-   (sentinel file test) — plus the owner's signed-off audit, meaning this
-   document superseded.
+4. **Mandate machinery: built, never armed** (updated 2026-11-26 — the
+   machinery landed the same day this audit was written). Mandate rows,
+   the guard chain, the halt sentinel and the append-only hash-chained
+   audit ledger exist in `trading/mandate.py` with the design's acceptance
+   test passed: the sentinel halts a violating order even with every
+   software layer above bypassed, a tampered mandate hash denies, every
+   evaluation lands in the audit ledger (`tests_trading/test_mandate.py`).
+   The `candidate_live → live` transition now refuses unless BOTH an
+   active unexpired mandate AND the human's audit signoff row exist
+   (`registry.py`); the signoff write path exists as a confirmed card
+   (`/api/trading/audit-signoffs`, recomputed-fingerprint 409 discipline).
+   What remains open here is not engineering: the owner's signed-off audit
+   — this document, read and consented to, once items 1–3 make that
+   consent meaningful.
 5. **A real-venue execution adapter.** Execution today is the local sandbox
    wearing the BINANCE label; "there is no Binance exec client in this
    process" (`desk/live.py` decision note 1). Nothing about keys,

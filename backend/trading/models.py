@@ -46,6 +46,26 @@ class Candle(Base):
         Index("ix_candles_sym_tf_time", "symbol", "timeframe", "open_time", unique=True),
     )
 
+class FundingRate(Base):
+    """USDT-M perpetual funding events — the F2 family's raw material.
+    Lives in research.db beside the candles: a research artifact in the
+    replaceable market-data store, rebuildable by ingestion, never the
+    owner's records. fundingTime is the settlement instant (every 8h on
+    Binance perps); the rate is what a position open across that instant
+    pays or receives."""
+    __tablename__ = "funding_rates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    funding_time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    rate: Mapped[float] = mapped_column(Float)  # signed decimal fraction, e.g. 0.0001 = 0.01%
+    mark_price: Mapped[float] = mapped_column(Float)
+
+    __table_args__ = (
+        Index("ix_funding_sym_time", "symbol", "funding_time", unique=True),
+    )
+
+
 
 class Trade(Base):
     """A completed (closed) round-trip trade executed by a bot."""

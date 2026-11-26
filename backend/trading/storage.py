@@ -149,3 +149,27 @@ __all__ = [
     "make_session_factory",
     "upsert_candles",
 ]
+
+
+def upsert_funding_rates(session: Session, symbol: str, rows: list[dict]) -> int:
+    """Idempotent funding-event write, same conflict discipline as candles."""
+    if not rows:
+        return 0
+    from trading.models import FundingRate
+
+    fresh = [
+        {"symbol": symbol, "funding_time": r["funding_time"], "rate": r["rate"], "mark_price": r["mark_price"]}
+        for r in rows
+    ]
+    before = session.query(FundingRate).filter_by(symbol=symbol).count()
+    for row in fresh:
+        exists = (
+            session.query(FundingRate)
+            .filter_by(symbol=row["symbol"], funding_time=row["funding_time"])
+            .first()
+        )
+        if not exists:
+            session.add(FundingRate(**row))
+    session.commit()
+    after = session.query(FundingRate).filter_by(symbol=symbol).count()
+    return after - before

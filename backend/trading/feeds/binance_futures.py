@@ -152,3 +152,37 @@ async def full_intel(symbol: str = "BTCUSDT") -> dict:
         "long_short": lsr,
         "taker_flow": flow,
     }
+
+
+async def funding_history_full(symbol: str, days: int) -> list[dict]:
+    """The complete funding-rate history for a symbol, paginated backwards
+    from now — the F2 family's raw ingestion. 1000 rows per request, three
+    settlements a day, so a 3-year pull is a handful of round trips. Each
+    row: funding_time (UTC), rate as a signed decimal fraction, mark_price.
+    Rows are venue truth, unparsed beyond types — provenance beats comfort."""
+    import datetime as dt
+
+    end_ms = int(dt.datetime.now(dt.UTC).timestamp() * 1000)
+    start_ms = end_ms - days * 86_400_000
+    out: list[dict] = []
+    cursor = start_ms
+    async with httpx.AsyncClient(timeout=15) as client:
+        while cursor < end_ms:
+            r = await client.get(
+                f"{FAPI}/fapi/v1/fundingRate",
+                params={"symbol": symbol.upper(), "startTime": cursor, "limit": 1000},
+            )
+            r.raise_for_status()
+            rows = r.json()
+            if not rows:
+                break
+            for row in rows:
+                out.append({
+                    "funding_time": dt.datetime.fromtimestamp(int(row["fundingTime"]) / 1000, dt.UTC),
+                    "rate": float(row["fundingRate"]),
+                    "mark_price": float(row.get("markPrice") or 0.0),
+                })
+            cursor = int(rows[-1]["fundingTime"]) + 1
+            if len(rows) < 1000:
+                break
+    return out

@@ -132,6 +132,26 @@ async def _ingest(symbol: str, timeframe: str, days: int, db_url: str) -> tuple[
     return (inserted, venue)
 
 
+def cmd_ingest_funding(args: argparse.Namespace) -> int:
+    """Funding-rate history ingestion — the F2 family's data plane."""
+    import asyncio as _asyncio
+
+    from trading.feeds.binance_futures import funding_history_full
+    from trading.models import init_schema
+    from trading.storage import upsert_funding_rates
+
+    rows = _asyncio.run(funding_history_full(args.symbol, args.days))
+    engine = make_engine(args.db)
+    init_schema(engine)
+    sf = make_session_factory(engine)
+    with sf() as session:
+        inserted = upsert_funding_rates(session, args.symbol.upper(), rows)
+    engine.dispose()
+    print(json.dumps({"ingested": inserted, "venue": "binance", "kind": "funding",
+                      "symbol": args.symbol.upper(), "days": args.days, "db": args.db}))
+    return 0
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     inserted, venue = asyncio.run(_ingest(args.symbol, args.timeframe, args.days, args.db))
     print(
@@ -563,6 +583,12 @@ def main(argv: list[str] | None = None) -> int:
     p_ing.add_argument("--days", type=int, default=365)
     p_ing.add_argument("--db", default=DEFAULT_RESEARCH_DB, help="candle store (never data.db)")
     p_ing.set_defaults(fn=cmd_ingest)
+
+    p_fund = sub.add_parser("ingest-funding", help="backfill funding-rate history into the research database")
+    p_fund.add_argument("--symbol", required=True)
+    p_fund.add_argument("--days", type=int, default=365)
+    p_fund.add_argument("--db", default=DEFAULT_RESEARCH_DB)
+    p_fund.set_defaults(fn=cmd_ingest_funding)
 
     p_val = sub.add_parser("validate", help="backtest + validation gate + verdict row")
     p_val.add_argument("--bot", required=True, choices=sorted(STRATEGIES))

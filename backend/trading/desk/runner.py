@@ -107,7 +107,8 @@ def build_desk(args, seed_history):
 def status_line(desk, started_monotonic: float) -> str:
     """One JSON object with the desk's operational facts — the evidence
     surface for smoke runs and the soak."""
-    out = {"uptime_s": round(time.monotonic() - started_monotonic, 1), "bots": {}}
+    out = {"uptime_s": round(time.monotonic() - started_monotonic, 1), "bots": {},
+           "heartbeat_failures": getattr(desk, "heartbeat_failures", 0)}
     for spec in desk.specs:
         bot = spec.bot
         strat = desk._strategy_for(bot)
@@ -154,8 +155,10 @@ def write_heartbeats(desk, running: bool) -> None:
             row.last_heartbeat = dt.datetime.now(dt.UTC)
             row.note = f"desk kernel | {len(desk.states[spec.bot].positions)} positions"
         session.commit()
+        desk.heartbeat_failures = 0
     except Exception:
         session.rollback()
+        desk.heartbeat_failures = getattr(desk, "heartbeat_failures", 0) + 1
         log.exception("heartbeat write failed — engine lamp will read offline")
     finally:
         session.close()

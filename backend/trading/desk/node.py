@@ -32,6 +32,7 @@ from trading.desk.worker import FeedHealth
 from trading.kernel import (
     TIMEFRAME_BAR_SPEC,
     TIMEFRAME_NS,
+    ExposureBook,
     HarnessRunState,
     _strategy_class,
     make_sim_instrument,
@@ -120,6 +121,8 @@ class DeskNode:
         self.initial_equity = initial_equity
         self.feed_stale_after_s = feed_stale_after_s
         self.feed_health: dict[str, FeedHealth] = {}
+        # one shared book — the gross exposure cap reads desk-wide truth
+        self._exposure_book = ExposureBook()
         self.instruments = {}
         self.frames: dict[str, IncrementalFrame] = {}
         self.states: dict[str, HarnessRunState] = {}
@@ -138,6 +141,18 @@ class DeskNode:
                     ledger.equity_point(self._realized_total())
             except Exception:
                 log.exception("provenance write failed for %s — desk state and DB now diverge", spec.bot)
+
+        return hook
+
+    def _make_veto_hook(self, spec: DeskSpec):
+        """Exposure-cap vetoes leave the run state through here: logged with
+        the bot's identity and every input number — a rail that cannot
+        explain itself is removed, not trusted (design §6). Slice 4's risk
+        events table is the DB seam; until it exists the veto tape lives in
+        HarnessRunState.vetoes, which the run returns wholesale."""
+
+        def hook(veto: dict) -> None:
+            log.warning("entry vetoed [%s/%s]: %s", spec.bot, spec.symbol, veto)
 
         return hook
 
@@ -219,7 +234,11 @@ class DeskNode:
                 frame.seed(history)
             self.frames[spec.bot] = frame
 
-            state = HarnessRunState(self.initial_equity, on_position_event=self._make_hook(spec))
+            # ONE book per desk, handed to every strategy: the gross
+            # exposure cap is desk-wide by construction (design §10,
+            # multi-symbol), not a sum of per-bot blind spots.
+            state = HarnessRunState(self.initial_equity, on_position_event=self._make_hook(spec), exposure_book=self._exposure_book)
+            state.on_veto = self._make_veto_hook(spec)
             health = FeedHealth(timeout_s=self.feed_stale_after_s)
             state.on_bar_processed = health.beat
             self.feed_health[spec.bot] = health

@@ -25,6 +25,8 @@ class Signal:
     tp_rr: float = 1.5  # take-profit as reward:risk multiple of the stop distance
 
 
+MAX_APPROVED_LEVERAGE = 25.0  # absolute ceiling, legacy leverage_max bound — design pins no number, see BTConfig.leverage
+
 @dataclass
 class BTConfig:
     fee_pct: float = field(default_factory=lambda: get_settings().taker_fee_pct)
@@ -33,6 +35,33 @@ class BTConfig:
     risk_per_trade: float = field(default_factory=lambda: get_settings().risk_per_trade_risk_pct)
     confidence_min: float = 0.55
     max_bars_in_trade: int | None = None
+    # Per-strategy APPROVED leverage — a mandate property (design §2/§10):
+    # constant per strategy config, never a function of conviction. It scales
+    # the risk-budget qty linearly; the exposure caps below are what make a
+    # large approved value survivable. Default 1.0 (unlevered risk sizing);
+    # ceiling 25x because the design pins no numeric max and 25 was the
+    # legacy bound — anything above it was never approved for anyone.
+    leverage: float = 1.0
+    # Exposure caps, HARD: an entry that would breach either cap is vetoed
+    # and the veto recorded — never resized into compliance, never silently
+    # skipped. Values are notional/equity ratios. The defaults are calibrated
+    # against the unlevered baseline, not the legacy 0.6 margin number:
+    # risk_per_trade 2% over a 1×ATR stop on 0.5% bars implies ~4× equity
+    # notional at leverage 1 — a cap below that would veto the unlevered
+    # baseline itself and make the caps the sizing, which they are not. Caps
+    # exist to refuse the extremes (tight stops, high approved leverage).
+    max_symbol_exposure: float = 5.0
+    max_gross_exposure: float = 8.0
+
+    def __post_init__(self):
+        if not (self.leverage > 0):
+            raise ValueError(f"leverage must be positive, got {self.leverage}")
+        if self.leverage > MAX_APPROVED_LEVERAGE:
+            raise ValueError(f"leverage {self.leverage} exceeds approved ceiling {MAX_APPROVED_LEVERAGE}")
+        if not (self.max_symbol_exposure > 0) or not (self.max_gross_exposure > 0):
+            raise ValueError("exposure caps must be positive")
+        if self.max_symbol_exposure > self.max_gross_exposure:
+            raise ValueError("symbol cap above gross cap is never satisfiable netting")
 
 
 @dataclass
@@ -149,18 +178,25 @@ def run_backtest(
             and atr_arr[i] > 0
         ):
             stop_dist = sig.stop_atr * atr_arr[i]
+            # same three sizing stages as the kernel harness: risk budget,
+            # approved leverage as a constant multiplier, hard exposure caps.
+            # Confidence stays a GATE, never a size multiplier.
             risk_amount = equity * cfg.risk_per_trade
-            qty_local = risk_amount / stop_dist
-            fill = o[i] * (1 + slip) if sig.side == "long" else o[i] * (1 - slip)
-            pos_side = sig.side
-            entry_px = fill
-            qty = qty_local
-            entry_i = i
-            conf = sig.confidence
-            if sig.side == "long":
-                stop, tp = fill - stop_dist, fill + stop_dist * sig.tp_rr
+            qty_local = cfg.leverage * risk_amount / stop_dist
+            notional = qty_local * o[i]
+            if equity <= 0 or notional > equity * cfg.max_symbol_exposure or notional > equity * cfg.max_gross_exposure:
+                pass  # exposure-cap veto — caps are hard, never a resize
             else:
-                stop, tp = fill + stop_dist, fill - stop_dist * sig.tp_rr
+                fill = o[i] * (1 + slip) if sig.side == "long" else o[i] * (1 - slip)
+                pos_side = sig.side
+                entry_px = fill
+                qty = qty_local
+                entry_i = i
+                conf = sig.confidence
+                if sig.side == "long":
+                    stop, tp = fill - stop_dist, fill + stop_dist * sig.tp_rr
+                else:
+                    stop, tp = fill + stop_dist, fill - stop_dist * sig.tp_rr
 
         eq_curve.append(equity)
 

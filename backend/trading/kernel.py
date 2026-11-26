@@ -150,6 +150,33 @@ def build_bars(df: pd.DataFrame, instrument, timeframe: str) -> list:
     return bars
 
 
+class ExposureBook:
+    """Desk-wide open notional per instrument, updated at entry/close fill
+    time — the shared fact the gross exposure cap reads. A backtest run owns
+    its own instance; the desk hands ONE instance to every strategy's run
+    state, which is what makes the gross cap desk-wide by construction
+    (multi-symbol, design §10). Entries are keyed by client order id inside
+    an instrument bucket so several bots on the same instrument net
+    correctly: the cap compares TOTALS, netting is a venue concern."""
+
+    def __init__(self):
+        self._by_instrument: dict[str, dict[str, float]] = {}
+
+    def add(self, instrument_id: str, order_id: str, notional: float) -> None:
+        self._by_instrument.setdefault(instrument_id, {})[order_id] = notional
+
+    def remove(self, instrument_id: str, order_id: str) -> None:
+        bucket = self._by_instrument.get(instrument_id)
+        if bucket is not None:
+            bucket.pop(order_id, None)
+
+    def instrument_notional(self, instrument_id: str) -> float:
+        return sum(self._by_instrument.get(instrument_id, {}).values())
+
+    def gross_notional(self) -> float:
+        return sum(sum(bucket.values()) for bucket in self._by_instrument.values())
+
+
 class HarnessRunState:
     """Everything the run records for reconstruction. One instance per run —
     two engines never share it. `realized_net` is the validation's own
@@ -157,11 +184,19 @@ class HarnessRunState:
     net pnl of each close, so sizing inside the kernel run uses exactly the
     equity the ported engine would have used at that moment."""
 
-    def __init__(self, initial_equity: float, on_position_event=None):
+    def __init__(self, initial_equity: float, on_position_event=None, exposure_book=None):
         self.fills: list[dict] = []
         self.order_meta: dict[str, dict] = {}
         self.positions: list[dict] = []
         self.realized_net = float(initial_equity)
+        # the veto tape: every entry the exposure caps refuse lands here with
+        # its numbers — a cap that cannot explain itself is removed, not
+        # trusted (design §6). Visible in run state, and the desk's veto
+        # hook surfaces it further.
+        self.vetoes: list[dict] = []
+        self.on_veto = None
+        # shared across the desk's strategies; a backtest runs its own
+        self.exposure_book = exposure_book if exposure_book is not None else ExposureBook()
         # desk provenance hook: fn(event, pos_dict) called synchronously when
         # a position's entry fills ("entry") and when it settles ("close").
         # Backtests pass nothing — the reconstruction reads state wholesale.
@@ -181,7 +216,6 @@ class HarnessRunState:
         # still fill intrabar while its cancel is in flight.
         self.adjudicated_order_ids: set[str] = set()
         self.pending_cancel_ids: set[str] = set()
-
     def order_chain_drained(self) -> bool:
         """Every submitted order has reached a terminal-ish state — fill,
         acceptance, rejection or cancel — and no cancel command is still
@@ -418,11 +452,50 @@ def _make_strategy_class():
 
             close_k = self._last_close
             stop_dist = stop_atr * atr_abs
+            # three logged sizing stages (design D10), arithmetic only:
+            #  1. risk budget: realized validation equity x risk_per_trade —
+            #     the only leverage-free risk input
+            #  2. approved leverage: a CONSTANT per-strategy multiplier (the
+            #     mandate property). Confidence NEVER appears here — it is a
+            #     gate (confidence_min), not a size input.
+            #  3. hard caps: per-symbol and gross exposure vs equity. A
+            #     breach VETOES the entry with a recorded reason — caps are
+            #     hard, never a quiet resize.
             risk_amount = self._state.realized_net * self._cfg.risk_per_trade
-            qty_raw = risk_amount / stop_dist
+            qty_raw = self._cfg.leverage * risk_amount / stop_dist
             instrument = self.cache.instrument(self.instrument_id)
             qty = float(instrument.make_qty(qty_raw).as_decimal())
             if qty <= 0:
+                return
+
+            equity = self._state.realized_net
+            notional = qty * close_k
+            book = self._state.exposure_book
+            iid = str(self.instrument_id)
+            cap_breach = None
+            if equity <= 0:
+                cap_breach = "equity_nonpositive"
+            elif notional + book.instrument_notional(iid) > equity * self._cfg.max_symbol_exposure:
+                cap_breach = "symbol_exposure_cap"
+            elif notional + book.gross_notional() > equity * self._cfg.max_gross_exposure:
+                cap_breach = "gross_exposure_cap"
+            if cap_breach is not None:
+                veto = {
+                    "reason": cap_breach,
+                    "instrument": iid,
+                    "side": side_str,
+                    "notional": notional,
+                    "equity": equity,
+                    "symbol_notional_open": book.instrument_notional(iid),
+                    "gross_notional_open": book.gross_notional(),
+                    "symbol_cap": self._cfg.max_symbol_exposure,
+                    "gross_cap": self._cfg.max_gross_exposure,
+                    "signal_bar": sig_bar,
+                }
+                self._state.vetoes.append(veto)
+                self.log.warning(f"entry vetoed: {cap_breach} {veto}")
+                if self._state.on_veto is not None:
+                    self._state.on_veto(veto)
                 return
 
             if side_str == "long":
@@ -477,6 +550,12 @@ def _make_strategy_class():
             }
             self._state.order_meta[str(entry_order.client_order_id)] = {**meta, "role": "entry"}
             self.submit_order(entry_order)
+            # exposure enters the book at SUBMISSION, repriced at fill: two
+            # entries in flight at once must each see the other's committed
+            # notional, or simultaneous signals both pass a cap that only
+            # one of them can afford. The fill handler overwrites with the
+            # fill fact.
+            self._state.exposure_book.add(str(self.instrument_id), str(entry_order.client_order_id), notional)
             self._open_pos = pos
 
         def _close_market(self, reason: str):
@@ -560,9 +639,12 @@ def _make_strategy_class():
                 return
             if meta["role"] == "rearm" and oid == pos.get("entry_order_id"):
                 self._on_rearm_filled(pos, fill)
+                # the rearmed position is real exposure — the cap must see it
+                self._book_exposure(oid, fill)
             elif meta["role"] == "entry" and oid == pos["entry_order_id"]:
                 pos["pending"] = False
                 pos["entry_fill"] = fill
+                self._book_exposure(oid, fill)
                 self._place_protective(pos)
                 if self._state.on_position_event is not None:
                     self._state.on_position_event("entry", pos)
@@ -572,10 +654,17 @@ def _make_strategy_class():
                     pos["closed"] = True
                     self._settle(pos)
                     self._state.positions.append(pos)
+                    self._state.exposure_book.remove(str(self.instrument_id), pos.get("entry_order_id", ""))
                     if self._state.on_position_event is not None:
                         self._state.on_position_event("close", pos)
                     self._cancel_sibling_protective(pos, meta["role"])
                     self._open_pos = None
+
+        def _book_exposure(self, oid: str, fill: dict) -> None:
+            """Exposure enters the book at the fill fact, never the estimate
+            the cap checked — they differ by gaps, and the book is the record
+            of what is OPEN."""
+            self._state.exposure_book.add(str(self.instrument_id), oid, fill["price"] * fill["qty"])
 
         def _on_rearm_filled(self, pos: dict, fill: dict) -> None:
             """Rearm entry filled — reconstruct the position bookkeeping and
@@ -747,6 +836,7 @@ def run_kernel_backtest(
     cfg: BTConfig | None = None,
     timeframe: str = "1h",
     symbol: str = "BTCUSDT",
+    exposure_book=None,
 ) -> BTResult:
     """Backtest on the nautilus kernel with the ported engine's economics
     reconstructed from its fills. Same contract as `run_backtest` — df is the
@@ -754,9 +844,12 @@ def run_kernel_backtest(
     equity curve and the same metrics — except the strategy is passed bare:
     harness wrapping happens here, once, so the truncation logic exists in
     exactly one place.
+
+    exposure_book: optional pre-existing ExposureBook — the multi-strategy
+    seam. The desk shares one book across strategies; a test can seed one
+    to exercise the gross cap as a desk-wide rail.
     """
     cfg = cfg or BTConfig()
-
     from nautilus_trader.backtest.config import BacktestEngineConfig
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.config import LoggingConfig, StrategyConfig
@@ -765,7 +858,7 @@ def run_kernel_backtest(
     from nautilus_trader.model.objects import Money
 
     instrument = make_sim_instrument(symbol)
-    state = HarnessRunState(cfg.initial_equity)
+    state = HarnessRunState(cfg.initial_equity, exposure_book=exposure_book)
 
     config = BacktestEngineConfig(
         trader_id=TraderId("KERNEL-BT-001"),
@@ -805,6 +898,9 @@ def run_kernel_backtest(
 
     trades, equity = _reconstruct(df, state, cfg, timeframe)
     metrics = _metrics(trades, equity, BarsPerYear.get(timeframe, 8_760))
+    # the veto tape rides inside metrics — sizing provenance (design D10)
+    # belongs to every validation row, and a BTResult is the audit object
+    metrics["vetoes"] = [dict(v) for v in state.vetoes]
     engine.dispose()
     return BTResult(trades, equity, metrics)
 

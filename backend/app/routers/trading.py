@@ -95,7 +95,11 @@ def trading_status(db: Session = Depends(get_trading_db)) -> dict:
         try:
             rows = db.execute(
                 select(BotStatus).where(
-                    BotStatus.name.notlike("__%"), BotStatus.last_heartbeat.isnot(None)
+                    # the underscores in the sentinel prefix are LIKE wildcards —
+                    # unescaped, this filter excludes every bot name longer than
+                    # one character (measured 2026-11-26: the engine lamp stayed
+                    # offline with heartbeats present)
+                    BotStatus.name.notlike("\\_\\_%", escape="\\"), BotStatus.last_heartbeat.isnot(None)
                 )
             ).scalars().all()
             beats = [r.last_heartbeat for r in rows if r.last_heartbeat is not None]

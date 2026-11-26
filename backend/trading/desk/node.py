@@ -87,16 +87,30 @@ class DeskNode:
         trader_id: str = "DESK-001",
         initial_equity: float | None = None,
         feed_stale_after_s: float = 900.0,
+        venue: str = PAPER_VENUE,
+        instrument_ids: dict[str, str] | None = None,
+        frame_backfills: dict[str, object] | None = None,
     ):
         """
         seed_history: fn(symbol, timeframe) -> list of candle dicts, newest-last,
         covering at least the feature warm-up (~130 bars) plus whatever the
         restart logic needs to re-derive signal bars of open positions.
+
+        venue: the sandbox exchange's venue label — PAPER in tests, BINANCE
+        in production wiring (live.py documents why the label follows the
+        data source). instrument_ids: per-bot real instrument id strings,
+        used INSTEAD of synthesizing zero-margin sim instruments — the
+        production path passes them and the actual instrument definitions
+        arrive from the data client's provider at connect time; tests pass
+        nothing and get the sim instrument on `venue`.
         """
         self.specs = specs
         self.session_factory = session_factory
         self.seed_history = seed_history
         self.trader_id = trader_id
+        self.venue = venue
+        self.instrument_ids = instrument_ids or {}
+        self.frame_backfills = frame_backfills or {}
         if initial_equity is None:
             # the paper desk's equity is the validation equity: sizing parity
             # between backtest and paper is meaningless otherwise
@@ -132,9 +146,11 @@ class DeskNode:
             len(self.states) - 1
         )
 
-    def build(self, exec_config=None, data_config=None):
+    def build(self, exec_config=None, data_config=None, data_factories: dict | None = None):
         """Assemble the node. `exec_config`/`data_config` are the venue
-        client configs; tests pass none and drive the sandbox alone."""
+        client configs; `data_factories` registers adapter factories BEFORE
+        node.build (the live wiring passes the binance data factory here).
+        Tests pass none of these and drive the sandbox alone."""
         from nautilus_trader.adapters.sandbox.config import SandboxExecutionClientConfig
         from nautilus_trader.adapters.sandbox.factory import SandboxLiveExecClientFactory
         from nautilus_trader.config import LoggingConfig, TradingNodeConfig
@@ -144,9 +160,9 @@ class DeskNode:
         # dominate slice 1; mixed TFs key the conversion per spec at write time)
         self.ledger = DeskLedger(self.session_factory, TIMEFRAME_NS[self.specs[0].timeframe])
 
-        exec_clients = {
-            PAPER_VENUE: SandboxExecutionClientConfig(
-                venue=PAPER_VENUE,
+        exec_clients = exec_config or {
+            self.venue: SandboxExecutionClientConfig(
+                venue=self.venue,
                 starting_balances=[f"{self.initial_equity:.2f} USDT"],
                 base_currency="USDT",
                 oms_type="NETTING",
@@ -160,7 +176,9 @@ class DeskNode:
             data_clients=data_config or {},
         )
         node = TradingNode(cfg)
-        node.add_exec_client_factory(PAPER_VENUE, SandboxLiveExecClientFactory)
+        node.add_exec_client_factory(self.venue, SandboxLiveExecClientFactory)
+        for name, factory in (data_factories or {}).items():
+            node.add_data_client_factory(name, factory)
         node.build()
 
         # The vendor sandbox subscribes `data.*.{venue}.*`, which matches tick
@@ -175,15 +193,27 @@ class DeskNode:
         for client in exec_engine._clients.values():
             if hasattr(client, "on_data") and type(client).__name__ == "SandboxExecutionClient":
                 node.kernel.msgbus.subscribe(
-                    f"data.bars.*.{PAPER_VENUE}*",
+                    f"data.bars.*.{self.venue}*",
                     handler=client.on_data,
                 )
         for spec in self.specs:
-            instrument = make_sim_instrument(spec.symbol, venue=PAPER_VENUE)
+            if spec.bot in self.instrument_ids:
+                # production wiring: the real adapter-provided instrument
+                # arrives from the data client's provider at connect time —
+                # correct tick/step sizes by construction, never the sim
+                # zero-margin shape. Nothing to register into the cache here.
+                instrument = None
+                instrument_id_str = self.instrument_ids[spec.bot]
+            else:
+                instrument = make_sim_instrument(spec.symbol, venue=self.venue)
+                instrument_id_str = str(instrument.id)
+                node.cache.add_instrument(instrument)
             self.instruments[spec.bot] = instrument
-            node.cache.add_instrument(instrument)
 
-            frame = IncrementalFrame()
+            frame = IncrementalFrame(
+                interval_ns=TIMEFRAME_NS[spec.timeframe],
+                backfill=self.frame_backfills.get(spec.bot),
+            )
             history = self.seed_history(spec.symbol, spec.timeframe)
             if history:
                 frame.seed(history)
@@ -198,7 +228,7 @@ class DeskNode:
             cfg_cls = make_harness_config()
             strat = _strategy_class()(
                 cfg_cls(
-                    instrument_id=str(instrument.id),
+                    instrument_id=instrument_id_str,
                     bar_spec=TIMEFRAME_BAR_SPEC[spec.timeframe],
                     harness_state=state,
                     frame_source=frame,

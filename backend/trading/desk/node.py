@@ -343,6 +343,25 @@ class DeskNode:
         return hook
 
 
+    def _make_signal_hook(self, spec: DeskSpec):
+        """Every non-None emission the strategy produced — including every
+        rejection — becomes a `signals` row (M3 acceptance). Same failure
+        discipline as the position ledger: a failed write must not kill the
+        bar loop; the kernel already decided, the row is its explanation."""
+        ledger = self.ledger
+
+        def hook(record: dict) -> None:
+            try:
+                ledger.signal_observed(
+                    spec.bot,
+                    {"symbol": spec.symbol, "timeframe": spec.timeframe},
+                    record,
+                )
+            except Exception:
+                log.exception("signal provenance write failed for %s — emission recorded in kernel memory only", spec.bot)
+
+        return hook
+
     def _realized_total(self) -> float:
         if not self.states:
             # an empty roster has no desk equity beyond the initial stake —
@@ -444,6 +463,7 @@ class DeskNode:
             )
             state.on_veto = self._make_veto_hook(spec)
             state.on_rail_event = self._make_rail_hook(spec)
+            state.on_signal = self._make_signal_hook(spec)
             health = FeedHealth(timeout_s=self.feed_stale_after_s)
             state.on_bar_processed = self._make_bar_watch(spec, health)
             self.feed_health[spec.bot] = health

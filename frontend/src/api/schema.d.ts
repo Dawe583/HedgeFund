@@ -1114,6 +1114,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/overview/fund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Fund Overview
+         * @description Total wealth (the ledger's own figure, reused, never reimplemented),
+         *     the engine's equity beside it, and the reconciliation gap between the
+         *     broker statement and the engine — each honestly absent when it cannot
+         *     be measured.
+         */
+        get: operations["get_fund_overview_api_overview_fund_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/overview/trading-account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Trading Account
+         * @description Declare which ledger institution is the trading desk's account — the
+         *     declaration the reconciliation measures against. The institution must
+         *     exist: mapping to a row that is not there would reconcile against air.
+         */
+        put: operations["put_trading_account_api_overview_trading_account_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/paid-recovery": {
         parameters: {
             query?: never;
@@ -1591,6 +1636,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trading/model-registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Registry
+         * @description The ML model registry: every version with its OOS evidence and its
+         *     role — champion (the gate's live weights), challenger (the newest version
+         *     of a name that is not the champion), retired (everything else). PSI drift
+         *     is NOT a column today: the retrain cycle computes it and it travels in
+         *     the supervisor insight's text — null on the wire is the documented,
+         *     honest answer rather than a parsed-out-of-prose fiction.
+         */
+        get: operations["model_registry_api_trading_model_registry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trading/positions": {
         parameters: {
             query?: never;
@@ -1716,6 +1786,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trading/signals/today": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Signals Today
+         * @description Today's emissions including the rejected ones (UTC day, server clock —
+         *     the same wall the vetoes tape uses). The table fills only from the kernel
+         *     desk's recording seam; a database whose engine predates it answers empty,
+         *     and empty is honest twice over: no engine ran, or no strategy spoke.
+         */
+        get: operations["signals_today_api_trading_signals_today_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trading/status": {
         parameters: {
             query?: never;
@@ -1751,6 +1844,52 @@ export interface paths {
          *     versions in state paper, which /rails and /status reflect).
          */
         get: operations["trading_strategies_api_trading_strategies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trading/strategy-panels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Strategy Panels
+         * @description Per-bot panel data for TRADING OPS: the cumulative realized net pnl
+         *     curve per bot, derived from the desk's own closed trades — equity_points
+         *     rows are portfolio-wide by design, so a per-bot equity figure would be an
+         *     allocation fiction; realized pnl is not. Empty bots are simply absent.
+         */
+        get: operations["strategy_panels_api_trading_strategy_panels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trading/validation-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Validation Queue
+         * @description The RESEARCH validation queue: versions sitting in research state —
+         *     registered, never promoted past the gate — beside the gate's failures
+         *     with the reasons it wrote. Both empty is honest: nothing in flight,
+         *     nothing failed.
+         */
+        get: operations["validation_queue_api_trading_validation_queue_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4516,6 +4655,130 @@ export interface components {
             pct: number;
         };
         /**
+         * OverviewFund
+         * @description The consolidated fund overview (design §8): ledger wealth beside the
+         *     engine's own figure, and the reconciliation between the two statements
+         *     about the same money.
+         *
+         *     The consolidated total is LEDGER wealth — the trading account is already
+         *     inside it through the broker statement — with the engine's equity never
+         *     summed in.
+         */
+        OverviewFund: {
+            reconciliation: components["schemas"]["OverviewReconciliation"];
+            total_wealth: components["schemas"]["DashboardSummary"];
+            trading_equity: components["schemas"]["OverviewTradingEquity"];
+        };
+        /**
+         * OverviewReconciliation
+         * @description Ledger statement vs engine equity for the mapped trading account.
+         *
+         *     The statement side is the ledger's own reading of the account: projected
+         *     positions at market plus projected cash, the same arithmetic that feeds
+         *     net worth, plus the date of the last photograph/balance for provenance.
+         *     The gap is statement minus engine in the base, and it is None whenever
+         *     either side cannot be measured in it — a gap computed on a dollar figure
+         *     read as euro would be the wrong answer presented as the right one.
+         *
+         *     `missing` is the list of what stands between the reader and a gap, as
+         *     codes, in the order they would be resolved:
+         *     - `no-mapping` — no institution is declared as the trading account;
+         *     - `institution-gone` — the declared institution was deleted;
+         *     - `no-statement` — the account has no situation and no balance yet;
+         *     - `no-engine-equity` — the engine never wrote an equity row;
+         *     - `equity-unconvertible` — no rate converts the engine's dollars into the base.
+         *     An empty list means the gap is the figure it carries.
+         */
+        OverviewReconciliation: {
+            /**
+             * Engine As Of
+             * @description Timestamp of the engine row the gap is measured against
+             */
+            engine_as_of: string | null;
+            /**
+             * Engine Equity Base
+             * @description The engine's equity converted into the base
+             */
+            engine_equity_base: number | null;
+            /**
+             * Gap
+             * @description statement_total − engine equity, in the base. Signed: positive means the ledger reads more than the engine.
+             */
+            gap: number | null;
+            /** Institution Id */
+            institution_id: number | null;
+            /** Institution Name */
+            institution_name: string | null;
+            /**
+             * Missing
+             * @description What is missing for a gap to exist, as codes; empty means measured
+             */
+            missing: string[];
+            /**
+             * Statement Cash
+             * @description Projected cash of the account, in the base; None without a balance
+             */
+            statement_cash: number | null;
+            /**
+             * Statement Date
+             * @description The latest photograph or balance date behind the statement side — how fresh the photograph half of the comparison is
+             */
+            statement_date: string | null;
+            /**
+             * Statement Positions
+             * @description Projected investment positions of the account, in the base
+             */
+            statement_positions: number | null;
+            /**
+             * Statement Total
+             * @description Positions + cash in the base. None when the account has no statement at all.
+             */
+            statement_total: number | null;
+        };
+        /**
+         * OverviewTradingEquity
+         * @description What the trading engine last said the desk is worth, engine-reported.
+         *
+         *     `available` false is a first-class answer — an engine that never ran has
+         *     no equity to report, and that is a fact about the desk, not an error. The
+         *     figure never enters the net worth: the broker statement already contains
+         *     the money, so summing both would count it twice (design D13).
+         */
+        OverviewTradingEquity: {
+            /**
+             * As Of
+             * @description Timestamp of the latest engine equity row (UTC)
+             */
+            as_of: string | null;
+            /**
+             * Available
+             * @description False when the engine has written no equity row — never run, or the equity table does not exist in this database. An honest state, not an error.
+             */
+            available: boolean;
+            /**
+             * Currency
+             * @description The engine's own unit: paper desks trade dollar-quoted pairs
+             * @default USD
+             */
+            currency: string;
+            /**
+             * Source
+             * @description The table the figure is read from — provenance, not decoration
+             * @default equity_points
+             */
+            source: string;
+            /**
+             * Value
+             * @description The latest portfolio equity the engine wrote, in `currency`
+             */
+            value: number | null;
+            /**
+             * Value Base
+             * @description The same equity in the base currency, when a rate converts it; None when none does. Never a pass-through: a dollar figure is not a euro figure.
+             */
+            value_base: number | null;
+        };
+        /**
          * PaidAccept
          * @description The figures the page showed for a row's proposal. The server works the
          *     proposal out again and writes its own figures; these only say which
@@ -5631,6 +5894,17 @@ export interface components {
             known_countries: components["schemas"]["TaxCountryDefault"][];
         };
         /**
+         * TradingAccountMapping
+         * @description Which ledger institution is the trading desk's account (input).
+         */
+        TradingAccountMapping: {
+            /**
+             * Institution Id
+             * @description The institution the engine trades out of
+             */
+            institution_id: number;
+        };
+        /**
          * TradingApprovalResult
          * @description What one POST …/approve produced: the approval row the human's assent
          *     became, the new state row when the registry's guards let it through,
@@ -5756,6 +6030,15 @@ export interface components {
             qty: number;
             /** Side */
             side: string;
+            /**
+             * Signal Chain
+             * @default {}
+             */
+            signal_chain?: {
+                [key: string]: unknown;
+            };
+            /** Signal Time */
+            signal_time?: string | null;
             /** Symbol */
             symbol: string;
         };
@@ -5814,12 +6097,83 @@ export interface components {
             /** Breach Events */
             breach_events: components["schemas"]["TradingRiskEvent"][];
         };
+        /**
+         * TradingEquityFan
+         * @description The bootstrap/permutation equity fan: percentile bands and sample
+         *     paths over the trade steps of the validation's Monte Carlo. X is a step
+         *     index (trade count along the path), not a clock — the fan answers
+         *     "where could this path have gone", not "when".
+         */
+        TradingEquityFan: {
+            /** Actual */
+            actual: number[];
+            /** Band P5 */
+            band_p5: number[];
+            /** Band P25 */
+            band_p25: number[];
+            /** Band P50 */
+            band_p50: number[];
+            /** Band P75 */
+            band_p75: number[];
+            /** Band P95 */
+            band_p95: number[];
+            /** Initial Capital */
+            initial_capital: number;
+            /** Samples */
+            samples: number[][];
+            /** Steps */
+            steps: number[];
+        };
         /** TradingEquityPoint */
         TradingEquityPoint: {
             /** Equity */
             equity: number;
             /** T */
             t: string;
+        };
+        /**
+         * TradingModelRegistry
+         * @description GET /api/trading/model-registry — every ML model version with its
+         *     promotion role and OOS evidence. Empty is the first-class answer: no
+         *     retrain cycle has ever written a row.
+         */
+        TradingModelRegistry: {
+            /** Models */
+            models: components["schemas"]["TradingModelVersionItem"][];
+            /** Psi Note */
+            psi_note: string;
+        };
+        /**
+         * TradingModelVersionItem
+         * @description One ML model registry row: champion/challenger role, the OOS metrics
+         *     the promotion gate measured, and the PSI drift when — and only when —
+         *     it is honestly knowable. PSI is computed per retrain cycle and today
+         *     travels inside the supervisor insight's text, never a column: null here
+         *     is the documented answer, and the registry panel says where it lives.
+         */
+        TradingModelVersionItem: {
+            /** Id */
+            id: number;
+            /** Is Champion */
+            is_champion: boolean;
+            /** Name */
+            name: string;
+            /** Notes */
+            notes: string;
+            /** Oos Accuracy */
+            oos_accuracy: number;
+            /** Oos Precision Long */
+            oos_precision_long: number;
+            /** Psi Drift */
+            psi_drift: number | null;
+            /** Role */
+            role: string;
+            /** Train Window Days */
+            train_window_days: number;
+            /** Trained At */
+            trained_at: string | null;
+            /** Version */
+            version: number;
         };
         /**
          * TradingPosition
@@ -6013,6 +6367,7 @@ export interface components {
             engine_version: string | null;
             /** Equity Curve */
             equity_curve: components["schemas"]["TradingEquityPoint"][] | null;
+            equity_fan?: components["schemas"]["TradingEquityFan"] | null;
             /** Id */
             id: number;
             metrics: components["schemas"]["TradingRunMetrics"];
@@ -6079,6 +6434,53 @@ export interface components {
             /** Win Rate */
             win_rate: number;
         };
+        /**
+         * TradingSignalItem
+         * @description One recorded emission — side, confidence, the signal bar's own time,
+         *     and the outcome it met (entered / veto:* / below_confidence / no_atr /
+         *     in_position / exited / flat_noop). `details` carries the sizing chain
+         *     for entered and vetoed emissions: risk amount, stop distance, raw and
+         *     rounded quantity, notional, the caps. Empty dict elsewhere, never
+         *     invented numbers.
+         */
+        TradingSignalItem: {
+            /** Bar Time */
+            bar_time: string | null;
+            /** Bot */
+            bot: string;
+            /** Confidence */
+            confidence: number;
+            /** Created At */
+            created_at: string | null;
+            /** Details */
+            details: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id: number;
+            /** Outcome */
+            outcome: string;
+            /** Side */
+            side: string;
+            /** Symbol */
+            symbol: string;
+            /** Timeframe */
+            timeframe: string;
+        };
+        /**
+         * TradingSignalsToday
+         * @description GET /api/trading/signals/today — today's emissions per bot with the
+         *     outcome counts. Empty rows is the first-class answer twice over: an
+         *     engine that never ran has no emissions, and an engine whose strategies
+         *     stayed silent has none either — the two read apart on the engine lamp,
+         *     which is exactly why the lamp exists.
+         */
+        TradingSignalsToday: {
+            /** Date */
+            date: string;
+            /** Signals */
+            signals: components["schemas"]["TradingSignalItem"][];
+        };
         /** TradingStatus */
         TradingStatus: {
             /** Db Ok */
@@ -6109,6 +6511,21 @@ export interface components {
             symbols: string[];
             /** Timeframe */
             timeframe: string;
+        };
+        /**
+         * TradingStrategyPanel
+         * @description One bot's per-strategy panel data: the cumulative realized net pnl
+         *     curve derived from the desk's own closed trades (never estimated —
+         *     equity_points rows are portfolio-wide, so a per-bot equity would be an
+         *     allocation fiction), plus the count the panel captions with.
+         */
+        TradingStrategyPanel: {
+            /** Bot */
+            bot: string;
+            /** Curve */
+            curve: components["schemas"]["TradingEquityPoint"][];
+            /** Trades Count */
+            trades_count: number;
         };
         /**
          * TradingTrackRecord
@@ -6150,6 +6567,54 @@ export interface components {
             qty: number;
             /** Side */
             side: string;
+        };
+        /**
+         * TradingValidationQueue
+         * @description GET /api/trading/validation-queue — versions awaiting the gates and
+         *     the gate's failures with their reasons. Both lists empty is the honest
+         *     answer for a pipeline with nothing in flight and nothing failed.
+         */
+        TradingValidationQueue: {
+            /** Awaiting */
+            awaiting: components["schemas"]["TradingValidationQueueItem"][];
+            /** Failures */
+            failures: components["schemas"]["TradingValidationQueueItem"][];
+        };
+        /**
+         * TradingValidationQueueItem
+         * @description One version waiting at a gate, or a validation verdict with its
+         *     reasons. `kind` distinguishes the two sentences: "awaiting" is a version
+         *     in research state; "failure" is a validation row whose verdict is not
+         *     validated, carrying the gate's own sentences. Awaiting versions carry no
+         *     verdict numbers because none exist — explicit nulls, never zeros.
+         */
+        TradingValidationQueueItem: {
+            /** Bot */
+            bot: string | null;
+            /** Created At */
+            created_at: string | null;
+            /** Kind */
+            kind: string;
+            /** Min Trades Required */
+            min_trades_required: number | null;
+            /** Permutation P */
+            permutation_p: number | null;
+            /** Reasons */
+            reasons: string[];
+            /** Strategy Key */
+            strategy_key: string | null;
+            /** Timeframe */
+            timeframe: string | null;
+            /** Trades N */
+            trades_n: number | null;
+            /** Validation Id */
+            validation_id: number | null;
+            /** Verdict */
+            verdict: string | null;
+            /** Version */
+            version: number | null;
+            /** Version Id */
+            version_id: number | null;
         };
         /** TradingValidationSummary */
         TradingValidationSummary: {
@@ -8824,6 +9289,59 @@ export interface operations {
             };
         };
     };
+    get_fund_overview_api_overview_fund_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OverviewFund"];
+                };
+            };
+        };
+    };
+    put_trading_account_api_overview_trading_account_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TradingAccountMapping"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OverviewReconciliation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     accept_all_paid_api_paid_recovery_post: {
         parameters: {
             query?: never;
@@ -9729,6 +10247,26 @@ export interface operations {
             };
         };
     };
+    model_registry_api_trading_model_registry_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingModelRegistry"];
+                };
+            };
+        };
+    };
     list_positions_api_trading_positions_get: {
         parameters: {
             query?: never;
@@ -9844,6 +10382,26 @@ export interface operations {
             };
         };
     };
+    signals_today_api_trading_signals_today_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingSignalsToday"];
+                };
+            };
+        };
+    };
     trading_status_api_trading_status_get: {
         parameters: {
             query?: never;
@@ -9880,6 +10438,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TradingStrategy"][];
+                };
+            };
+        };
+    };
+    strategy_panels_api_trading_strategy_panels_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingStrategyPanel"][];
+                };
+            };
+        };
+    };
+    validation_queue_api_trading_validation_queue_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingValidationQueue"];
                 };
             };
         };

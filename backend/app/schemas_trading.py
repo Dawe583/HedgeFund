@@ -176,6 +176,7 @@ class TradingRunDetail(TradingRunItem):
     min_trades_required: int | None
     equity_curve: list[TradingEquityPoint] | None
     trades: list[TradingTradeEvidence] | None
+    equity_fan: "TradingEquityFan | None" = None
 
 
 class TradingPosition(BaseModel):
@@ -232,6 +233,13 @@ class TradingClosedTrade(BaseModel):
     entry_dev_ticks: float | None
     exit_dev_ticks: float | None
     entry_lag_bars: int | None
+    # the provenance drill-down anchor: the signal bar's own timestamp, null
+    # on rows written before the recording seam. `signal_chain` is the joined
+    # emission's outcome and sizing chain — empty dict when the chain is
+    # honestly unwalkable (pre-seam rows, or a restarted desk whose memory
+    # of the emission died with the process that recorded it).
+    signal_time: dt.datetime | None = None
+    signal_chain: dict[str, Any] = {}
 
 
 class TradingDivergenceFillStats(BaseModel):
@@ -387,3 +395,126 @@ class TradingRegistry(BaseModel):
     nothing, and the registry that shows nothing is the gate working."""
 
     versions: list[TradingRegistryVersion]
+
+# --------------------------------------------------------------------------
+# M4 dashboard additions: signals, per-strategy panels, validation queue,
+# model registry — the §8 TRADING OPS + RESEARCH surfaces.
+
+
+class TradingSignalItem(BaseModel):
+    """One recorded emission — side, confidence, the signal bar's own time,
+    and the outcome it met (entered / veto:* / below_confidence / no_atr /
+    in_position / exited / flat_noop). `details` carries the sizing chain
+    for entered and vetoed emissions: risk amount, stop distance, raw and
+    rounded quantity, notional, the caps. Empty dict elsewhere, never
+    invented numbers."""
+
+    id: int
+    created_at: dt.datetime | None
+    bot: str
+    symbol: str
+    timeframe: str
+    bar_time: dt.datetime | None
+    side: str
+    confidence: float
+    outcome: str
+    details: dict[str, Any]
+
+
+class TradingSignalsToday(BaseModel):
+    """GET /api/trading/signals/today — today's emissions per bot with the
+    outcome counts. Empty rows is the first-class answer twice over: an
+    engine that never ran has no emissions, and an engine whose strategies
+    stayed silent has none either — the two read apart on the engine lamp,
+    which is exactly why the lamp exists."""
+
+    date: str
+    signals: list[TradingSignalItem]
+
+
+class TradingStrategyPanel(BaseModel):
+    """One bot's per-strategy panel data: the cumulative realized net pnl
+    curve derived from the desk's own closed trades (never estimated —
+    equity_points rows are portfolio-wide, so a per-bot equity would be an
+    allocation fiction), plus the count the panel captions with."""
+
+    bot: str
+    curve: list[TradingEquityPoint]
+    trades_count: int
+
+
+class TradingValidationQueueItem(BaseModel):
+    """One version waiting at a gate, or a validation verdict with its
+    reasons. `kind` distinguishes the two sentences: "awaiting" is a version
+    in research state; "failure" is a validation row whose verdict is not
+    validated, carrying the gate's own sentences. Awaiting versions carry no
+    verdict numbers because none exist — explicit nulls, never zeros."""
+
+    kind: str  # awaiting | failure
+    version_id: int | None
+    strategy_key: str | None
+    version: int | None
+    timeframe: str | None
+    validation_id: int | None
+    bot: str | None
+    verdict: str | None
+    reasons: list[str]
+    created_at: dt.datetime | None
+    permutation_p: float | None
+    trades_n: int | None
+    min_trades_required: int | None
+
+
+class TradingValidationQueue(BaseModel):
+    """GET /api/trading/validation-queue — versions awaiting the gates and
+    the gate's failures with their reasons. Both lists empty is the honest
+    answer for a pipeline with nothing in flight and nothing failed."""
+
+    awaiting: list[TradingValidationQueueItem]
+    failures: list[TradingValidationQueueItem]
+
+
+class TradingModelVersionItem(BaseModel):
+    """One ML model registry row: champion/challenger role, the OOS metrics
+    the promotion gate measured, and the PSI drift when — and only when —
+    it is honestly knowable. PSI is computed per retrain cycle and today
+    travels inside the supervisor insight's text, never a column: null here
+    is the documented answer, and the registry panel says where it lives."""
+
+    id: int
+    name: str
+    version: int
+    trained_at: dt.datetime | None
+    train_window_days: int
+    oos_accuracy: float
+    oos_precision_long: float
+    is_champion: bool
+    role: str  # champion | challenger | retired
+    psi_drift: float | None
+    notes: str
+
+
+class TradingModelRegistry(BaseModel):
+    """GET /api/trading/model-registry — every ML model version with its
+    promotion role and OOS evidence. Empty is the first-class answer: no
+    retrain cycle has ever written a row."""
+
+    models: list[TradingModelVersionItem]
+    psi_note: str
+
+
+class TradingEquityFan(BaseModel):
+    """The bootstrap/permutation equity fan: percentile bands and sample
+    paths over the trade steps of the validation's Monte Carlo. X is a step
+    index (trade count along the path), not a clock — the fan answers
+    "where could this path have gone", not "when"."""
+
+    steps: list[int]
+    initial_capital: float
+    actual: list[float]
+    band_p5: list[float]
+    band_p25: list[float]
+    band_p50: list[float]
+    band_p75: list[float]
+    band_p95: list[float]
+    samples: list[list[float]]

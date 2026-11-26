@@ -218,3 +218,58 @@ export function isConflict(e: unknown): boolean {
     (e as { response: { status: number } }).response.status === 409
   );
 }
+
+/* ---- M4 §8 additions: signals, per-strategy panels, validation queue,
+   model registry — the TRADING OPS + RESEARCH surfaces. Same transcription
+   rule as everything above: the backend's pydantic models are canonical,
+   this file adds no mapping layer. */
+
+/** One recorded emission, rejections included — the M3 acceptance surface.
+    `outcome` is the closed vocabulary the backend documents on the model:
+    entered / veto:<rail> / qty_zero / below_confidence / no_atr /
+    in_position / exited / flat_noop. `details` carries the sizing chain for
+    entered and vetoed emissions — empty elsewhere, never invented. */
+export type TradingSignalItem = Schemas["TradingSignalItem"];
+export type TradingSignalsToday = Schemas["TradingSignalsToday"];
+
+export async function getTradingSignalsToday(): Promise<TradingSignalsToday> {
+  return (await api.get<TradingSignalsToday>("/api/trading/signals/today")).data;
+}
+
+/** One bot's per-strategy panel: the cumulative realized net pnl curve
+    derived from the desk's own closed trades (never an allocation of the
+    portfolio equity rows — those are desk-wide by design) and the count. */
+export type TradingStrategyPanel = Schemas["TradingStrategyPanel"];
+
+export async function getStrategyPanels(): Promise<TradingStrategyPanel[]> {
+  return (await api.get<TradingStrategyPanel[]>("/api/trading/strategy-panels")).data;
+}
+
+/** The validation queue: versions awaiting the gates (research state, no
+    verdict numbers — explicit nulls, never zeros) and the gate's failures
+    carrying the reasons it wrote. */
+export type TradingValidationQueue = Schemas["TradingValidationQueue"];
+export type TradingValidationQueueItem = Schemas["TradingValidationQueueItem"];
+
+export async function getValidationQueue(): Promise<TradingValidationQueue> {
+  return (await api.get<TradingValidationQueue>("/api/trading/validation-queue")).data;
+}
+
+/** The ML model registry: champion/challenger/retired role per version and
+    the OOS evidence the promotion gate measured. PSI drift is null on the
+    wire by design — the retrain cycle records it in the supervisor insight's
+    text, never a column — and `psi_note` is the panel's documentation of
+    exactly that. */
+export type TradingModelRegistry = Schemas["TradingModelRegistry"];
+export type TradingModelVersionItem = Schemas["TradingModelVersionItem"];
+
+export async function getModelRegistry(): Promise<TradingModelRegistry> {
+  return (await api.get<TradingModelRegistry>("/api/trading/model-registry")).data;
+}
+
+/** The equity fan: the Monte Carlo permutation percentile bands and sample
+    paths over the validation's trade steps. X is a step index, not a clock —
+    the fan answers where the path could have gone, not when. Null on the
+    detail means never recorded (or the path matrix honestly too large to
+    keep), and the UI says so instead of inventing bands. */
+export type TradingEquityFan = Schemas["TradingEquityFan"];

@@ -79,6 +79,11 @@ class Trade(Base):
     def pnl_pct(self) -> float:
         notional = self.qty * self.entry_price
         return self.pnl / notional if notional else 0.0
+    # the signal bar's own timestamp — the provenance chain's anchor
+    # (trade → signal → sizing chain). Nullable: rows predate the recording
+    # seam, and an unanchored trade is honestly unanchored, never invented
+    signal_time: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 
 
 class OpenPosition(Base):
@@ -106,6 +111,48 @@ class OpenPosition(Base):
     entry_dev_ticks: Mapped[float | None] = mapped_column(Float, nullable=True)
     entry_ref_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     entry_lag_bars: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+class SignalRecord(Base):
+    """Every signal every version emitted, INCLUDING the rejected ones —
+    M3 acceptance, design §4 line 433: signals are recorded even when
+    rejected. One row per non-None emission the kernel strategy produced;
+    bars where the strategy emitted nothing are the normal silence of a
+    selective strategy, not a signal.
+
+    `outcome` names what happened TO the emission, one closed vocabulary:
+      entered            — an entry order was submitted for it
+      veto:<rail|cap>    — the rails or exposure caps refused it (the same
+                           refusal ALSO lands on risk_events with inputs)
+      qty_zero           — sizing rounded to nothing
+      below_confidence   — confidence under the gate's floor
+      no_atr             — the volatility input was unknowable, so sizing
+                           had nothing to stand on
+      in_position        — a position was already open; the harness trades
+                           one at a time, so the signal could only be dropped
+      exited             — a flat emission that closed the open position
+      flat_noop          — a flat emission with no position to close
+    `details_json` carries the sizing chain (risk amount, stop distance,
+    raw and rounded quantity, notional, the caps checked) for entered and
+    vetoed emissions — the drill-down the dashboard walks trade → intent →
+    sizing → signal → version with.
+    """
+
+    __tablename__ = "signals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    bot: Mapped[str] = mapped_column(String(32), index=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    timeframe: Mapped[str] = mapped_column(String(8))
+    bar_time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    side: Mapped[str] = mapped_column(String(5))  # long | short | flat
+    confidence: Mapped[float] = mapped_column(Float)
+    outcome: Mapped[str] = mapped_column(String(64))
+    details_json: Mapped[str] = mapped_column(Text, default="{}")
+
+    __table_args__ = (
+        Index("ix_signals_bot_bar", "bot", "bar_time"),
+    )
 
 
 class EquityPoint(Base):
@@ -447,6 +494,8 @@ _SQLITE_MIGRATIONS: list[tuple[str, str, str]] = [
     ("strategy_versions", "budget_dev_ticks", "FLOAT"),
     ("strategy_versions", "budget_entry_lag_bars", "INTEGER"),
     ("strategy_versions", "budget_missed_bars", "INTEGER"),
+    # M4 §8: the provenance chain's anchor — trades point at their signal bar
+    ("trades", "signal_time", "DATETIME"),
 ]
 
 

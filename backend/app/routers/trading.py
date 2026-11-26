@@ -27,14 +27,18 @@ from app.schemas_trading import (
     KillSwitchState,
     TradingApprovalResult,
     TradingClosedTrade,
+    TradingModelRegistry,
     TradingRegistry,
     TradingDivergenceStatus,
     TradingPosition,
     TradingRunDetail,
     TradingRailsStatus,
     TradingRunItem,
+    TradingSignalsToday,
     TradingStatus,
     TradingStrategy,
+    TradingStrategyPanel,
+    TradingValidationQueue,
 )
 from trading.config import get_settings
 from trading.models import (
@@ -232,6 +236,221 @@ def _vetoes_today(db: Session) -> list[dict]:
     except (OperationalError, SQLAlchemyError):
         return []
 
+@router.get("/signals/today", response_model=TradingSignalsToday)
+def signals_today(db: Session = Depends(get_trading_db)) -> dict:
+    """Today's emissions including the rejected ones (UTC day, server clock —
+    the same wall the vetoes tape uses). The table fills only from the kernel
+    desk's recording seam; a database whose engine predates it answers empty,
+    and empty is honest twice over: no engine ran, or no strategy spoke."""
+    from trading.models import SignalRecord
+
+    day_start = dt.datetime.now(dt.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        names = set(inspect(db.bind).get_table_names())
+    except SQLAlchemyError:
+        names = set()
+    if "signals" not in names:
+        return {"date": day_start.date().isoformat(), "signals": []}
+    try:
+        rows = (
+            db.execute(
+                select(SignalRecord)
+                .where(SignalRecord.created_at >= day_start)
+                .order_by(SignalRecord.id.desc())
+                .limit(500)
+            )
+            .scalars()
+            .all()
+        )
+    except (OperationalError, SQLAlchemyError):
+        rows = []
+    return {
+        "date": day_start.date().isoformat(),
+        "signals": [
+            {
+                "id": r.id,
+                "created_at": _as_iso(r.created_at),
+                "bot": r.bot,
+                "symbol": r.symbol,
+                "timeframe": r.timeframe,
+                "bar_time": _as_iso(r.bar_time),
+                "side": r.side,
+                "confidence": r.confidence,
+                "outcome": r.outcome,
+                "details": json.loads(r.details_json or "{}"),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/strategy-panels", response_model=list[TradingStrategyPanel])
+def strategy_panels(db: Session = Depends(get_trading_db)) -> list[dict]:
+    """Per-bot panel data for TRADING OPS: the cumulative realized net pnl
+    curve per bot, derived from the desk's own closed trades — equity_points
+    rows are portfolio-wide by design, so a per-bot equity figure would be an
+    allocation fiction; realized pnl is not. Empty bots are simply absent."""
+    if not _tables_present(db):
+        return []
+    try:
+        rows = (
+            db.execute(select(Trade).order_by(Trade.exit_time))
+            .scalars()
+            .all()
+        )
+    except (OperationalError, SQLAlchemyError):
+        return []
+    by_bot: dict[str, list] = {}
+    for t in rows:
+        by_bot.setdefault(t.bot, []).append(t)
+    out = []
+    for bot in sorted(by_bot):
+        cumulative = 0.0
+        curve = []
+        for t in by_bot[bot]:
+            cumulative += t.pnl
+            curve.append({"t": _as_iso(t.exit_time), "equity": round(cumulative, 6)})
+        out.append({"bot": bot, "curve": curve, "trades_count": len(by_bot[bot])})
+    return out
+
+
+@router.get("/validation-queue", response_model=TradingValidationQueue)
+def validation_queue(db: Session = Depends(get_trading_db)) -> dict:
+    """The RESEARCH validation queue: versions sitting in research state —
+    registered, never promoted past the gate — beside the gate's failures
+    with the reasons it wrote. Both empty is honest: nothing in flight,
+    nothing failed."""
+    if not _tables_present(db):
+        return {"awaiting": [], "failures": []}
+    awaiting: list[dict] = []
+    failures: list[dict] = []
+    try:
+        versions = db.execute(select(StrategyVersion)).scalars().all()
+        states = db.execute(select(StrategyState).order_by(StrategyState.id)).scalars().all()
+    except (OperationalError, SQLAlchemyError):
+        versions, states = [], []
+    latest: dict[int, StrategyState] = {}
+    for s in states:
+        latest[s.version_id] = s
+    from trading.models import Strategy as StrategyRow
+
+    keys = {}
+    try:
+        keys = {s.id: s.key for s in db.execute(select(StrategyRow)).scalars().all()}
+    except (OperationalError, SQLAlchemyError):
+        keys = {}
+    for v in versions:
+        st = latest.get(v.id)
+        if st is not None and st.state == "research":
+            awaiting.append(
+                {
+                    "kind": "awaiting",
+                    "version_id": v.id,
+                    "strategy_key": keys.get(v.strategy_id),
+                    "version": v.version,
+                    "timeframe": v.timeframe,
+                    "validation_id": None,
+                    "bot": None,
+                    "verdict": None,
+                    "reasons": [],
+                    "created_at": _as_iso(st.created_at),
+                    "permutation_p": None,
+                    "trades_n": None,
+                    "min_trades_required": None,
+                }
+            )
+    try:
+        failed = (
+            db.execute(
+                select(BacktestValidation)
+                .where(BacktestValidation.verdict != "validated")
+                .order_by(BacktestValidation.id.desc())
+                .limit(50)
+            )
+            .scalars()
+            .all()
+        )
+    except (OperationalError, SQLAlchemyError):
+        failed = []
+    for v in failed:
+        failures.append(
+            {
+                "kind": "failure",
+                "version_id": None,
+                "strategy_key": None,
+                "version": None,
+                "timeframe": v.timeframe,
+                "validation_id": v.id,
+                "bot": v.bot,
+                "verdict": v.verdict,
+                "reasons": json.loads(v.reasons_json or "[]"),
+                "created_at": _as_iso(v.created_at),
+                "permutation_p": v.permutation_p,
+                "trades_n": v.trades_n,
+                "min_trades_required": v.min_trades_required,
+            }
+        )
+    return {"awaiting": awaiting, "failures": failures}
+
+
+@router.get("/model-registry", response_model=TradingModelRegistry)
+def model_registry(db: Session = Depends(get_trading_db)) -> dict:
+    """The ML model registry: every version with its OOS evidence and its
+    role — champion (the gate's live weights), challenger (the newest version
+    of a name that is not the champion), retired (everything else). PSI drift
+    is NOT a column today: the retrain cycle computes it and it travels in
+    the supervisor insight's text — null on the wire is the documented,
+    honest answer rather than a parsed-out-of-prose fiction."""
+    from trading.models import ModelVersion
+
+    psi_note = (
+        "PSI drift is computed per retrain cycle and recorded inside the supervisor "
+        "insight's text, never as a column — the registry answers it as null "
+        "rather than parsing prose. Persisting it is a schema change, not a panel."
+    )
+    try:
+        names = set(inspect(db.bind).get_table_names())
+    except SQLAlchemyError:
+        names = set()
+    if "model_versions" not in names:
+        return {"models": [], "psi_note": psi_note}
+    try:
+        rows = (
+            db.execute(select(ModelVersion).order_by(ModelVersion.name, ModelVersion.version.desc()))
+            .scalars()
+            .all()
+        )
+    except (OperationalError, SQLAlchemyError):
+        rows = []
+    # challenger: the newest version of its name, when it is not the champion
+    newest: dict[str, int] = {}
+    for r in rows:
+        newest.setdefault(r.name, r.version)
+    out = []
+    for r in rows:
+        if r.is_champion:
+            role = "champion"
+        elif r.version == newest.get(r.name):
+            role = "challenger"
+        else:
+            role = "retired"
+        out.append(
+            {
+                "id": r.id,
+                "name": r.name,
+                "version": r.version,
+                "trained_at": _as_iso(r.trained_at),
+                "train_window_days": r.train_window_days,
+                "oos_accuracy": r.oos_accuracy,
+                "oos_precision_long": r.oos_precision_long,
+                "is_champion": r.is_champion,
+                "role": role,
+                "psi_drift": None,
+                "notes": r.notes or "",
+            }
+        )
+    return {"models": out, "psi_note": psi_note}
+
 @router.get("/status", response_model=TradingStatus)
 def trading_status(db: Session = Depends(get_trading_db)) -> dict:
     """Engine state at a glance; offline is an answer, not a failure."""
@@ -339,6 +558,45 @@ def list_recent_trades(db: Session = Depends(get_trading_db)) -> list[dict]:
         )
     except OperationalError:
         return []
+    # the provenance drill-down: each trade's signal row, joined on the
+    # anchor the desk writes at close time (bot + signal bar timestamp).
+    # Rows written before the seam have no anchor and honestly no chain —
+    # signal_time null, empty dict, never a guessed linkage.
+    anchors: dict[tuple, dict] = {}
+    try:
+        names = set(inspect(db.bind).get_table_names())
+    except SQLAlchemyError:
+        names = set()
+    if "signals" in names:
+        try:
+            from trading.models import SignalRecord
+
+            sig_rows = (
+                db.execute(
+                    select(SignalRecord)
+                    .where(SignalRecord.outcome == "entered")
+                    .order_by(SignalRecord.id)
+                )
+                .scalars()
+                .all()
+            )
+            for s in sig_rows:
+                # newest write wins a same-bar collision, matching the desk's
+                # restart semantics — the last decision is the one that traded
+                anchors[(s.bot, _aware(s.bar_time))] = {
+                    "outcome": s.outcome,
+                    "confidence": s.confidence,
+                    "details": json.loads(s.details_json or "{}"),
+                }
+        except (OperationalError, SQLAlchemyError):
+            anchors = {}
+
+    def _chain(t) -> dict:
+        st = getattr(t, "signal_time", None)
+        if st is None:
+            return {}
+        return anchors.get((t.bot, _aware(st))) or {}
+
     return [
         {
             "id": t.id,
@@ -358,6 +616,8 @@ def list_recent_trades(db: Session = Depends(get_trading_db)) -> list[dict]:
             "entry_dev_ticks": getattr(t, "entry_dev_ticks", None),
             "exit_dev_ticks": getattr(t, "exit_dev_ticks", None),
             "entry_lag_bars": getattr(t, "entry_lag_bars", None),
+            "signal_time": _as_iso(getattr(t, "signal_time", None)),
+            "signal_chain": _chain(t),
         }
         for t in rows
     ]
@@ -487,6 +747,20 @@ def backtest_run_detail(run_id: int, db: Session = Depends(get_trading_db)) -> d
     for key, column in (("equity_curve", "equity_curve_json"), ("trades", "trades_json")):
         raw = getattr(run, column, None)
         payload[key] = json.loads(raw) if raw else None
+    # The equity fan lives in the validation row's full results JSON —
+    # validation_json.monte_carlo.equity_paths, written by the pipeline with
+    # the percentile bands and sample paths when the simulation size kept the
+    # path matrix (validation/validation.py documents the cutoff). Null means
+    # exactly what it means everywhere else here: never recorded, or the
+    # matrix was honestly too large to keep — never an invented fan.
+    fan = None
+    if validation is not None and validation.validation_json:
+        try:
+            full = json.loads(validation.validation_json)
+            fan = (full.get("monte_carlo") or {}).get("equity_paths") or None
+        except (ValueError, TypeError):
+            fan = None
+    payload["equity_fan"] = fan
     return payload
 
 

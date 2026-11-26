@@ -227,9 +227,15 @@ class HarnessRunState:
         # rail firing tape: non-veto firings (trip, breach, cooldown start,
         # halt observations) land here; entry-blocking firings land in
         # `vetoes` alongside the sizing vetoes so one tape explains every
-        # refused entry. The desk's hook persists both into risk_events.
         self.rail_events: list[dict] = []
         self.on_rail_event = None
+        # signal recording hook (M3 acceptance: every signal recorded
+        # including rejections): fn(record_dict) called synchronously for
+        # every non-None emission the strategy produced, AFTER the bar's
+        # action logic, with the outcome and — for entered/vetoed emissions —
+        # the sizing chain. The desk persists a `signals` row; backtests pass
+        # nothing — the reconstruction does not need per-bar emission tapes.
+        self.on_signal = None
         # the run's RailBook, built by the strategy class at init — attached
         # here so the desk can snapshot rail state per bot
         self.rails = None
@@ -413,26 +419,57 @@ def _make_strategy_class():
                 if not (isinstance(atr_pct, float) and math.isnan(atr_pct)) and atr_pct > 0:
                     atr_abs = float(atr_pct) * float(row["close"])
 
+            # outcome bookkeeping for the signal recording seam: one closed
+            # vocabulary (trading/models.py SignalRecord documents the words);
+            # details carries the sizing chain for entered/vetoed emissions
+            outcome = None
+            details: dict = {}
+
             # exits beat entries, as in the ported loop: flat signal first,
             # then timeout, never both in one bar
             if self._open_pos is not None and not self._open_pos.get("pending"):
                 if sig is not None and sig.side == "flat":
                     self._close_market("signal_exit")
+                    outcome = "exited"
                 elif (
                     cfg.max_bars_in_trade
                     and k - self._open_pos["signal_bar"] >= cfg.max_bars_in_trade
                 ):
                     self._close_market("timeout")
 
-            if (
-                sig is not None
-                and sig.side in ("long", "short")
-                and self._open_pos is None
-                and sig.confidence >= cfg.confidence_min
-                and atr_abs > 0
-            ):
-                self._enter(sig.side, sig.confidence, sig.stop_atr, sig.tp_rr, sig_bar, atr_abs)
+            if sig is not None and sig.side in ("long", "short"):
+                # the outcome vocabulary is closed and every branch is one of
+                # its words — a signal that becomes nothing is recorded as
+                # WHY it became nothing, which is the rejection the M3
+                # acceptance line demands visible
+                if self._open_pos is not None:
+                    outcome = "in_position"
+                elif sig.confidence < cfg.confidence_min:
+                    outcome = "below_confidence"
+                elif atr_abs <= 0:
+                    outcome = "no_atr"
+                else:
+                    entry = self._enter(sig.side, sig.confidence, sig.stop_atr, sig.tp_rr, sig_bar, atr_abs)
+                    outcome = entry["outcome"]
+                    details = entry["details"]
+            elif sig is not None and sig.side == "flat" and outcome is None:
+                # a flat emission with nothing to close: still a signal, and
+                # its no-op-ness is the honest outcome, never invisibility
+                outcome = "flat_noop"
 
+            if sig is not None and outcome is not None and self._state.on_signal is not None:
+                frame = self._frame_source.frame()
+                record = {
+                    "bar_time": frame.index[sig_bar].to_pydatetime() if len(frame) > sig_bar >= 0 else None,
+                    "side": sig.side,
+                    "confidence": float(sig.confidence),
+                    "outcome": outcome,
+                    "details": details,
+                }
+                try:
+                    self._state.on_signal(record)
+                except Exception:
+                    self.log.exception("signal hook failed — the emission stays in kernel memory only")
         def rearm(
             self,
             *,
@@ -576,7 +613,7 @@ def _make_strategy_class():
             rail_veto = self._rail_entry_verdict(side_str, sig_bar)
             if rail_veto is not None:
                 self._veto_entry(rail_veto)
-                return
+                return {"outcome": "veto:" + str(rail_veto.get("rail", rail_veto.get("reason", "rail"))), "details": rail_veto}
 
             close_k = self._last_close
             stop_dist = stop_atr * atr_abs
@@ -594,7 +631,7 @@ def _make_strategy_class():
             instrument = self.cache.instrument(self.instrument_id)
             qty = float(instrument.make_qty(qty_raw).as_decimal())
             if qty <= 0:
-                return
+                return {"outcome": "qty_zero", "details": {"qty_raw": qty_raw, "risk_amount": risk_amount, "stop_dist": stop_dist}}
 
             equity = self._state.realized_net
             notional = qty * close_k
@@ -621,7 +658,7 @@ def _make_strategy_class():
                     "signal_bar": sig_bar,
                 }
                 self._veto_entry(veto)
-                return
+                return {"outcome": "veto:" + cap_breach, "details": veto}
 
             if side_str == "long":
                 stop_price = close_k - stop_dist
@@ -682,6 +719,23 @@ def _make_strategy_class():
             # fill fact.
             self._state.exposure_book.add(str(self.instrument_id), str(entry_order.client_order_id), notional)
             self._open_pos = pos
+            # the sizing chain the signal row carries (design D10's three
+            # stages, made visible): risk budget in, raw quantity out, the
+            # caps it passed — the drill-down trade → intent → sizing reads
+            return {"outcome": "entered", "details": {
+                "risk_amount": risk_amount,
+                "stop_dist": stop_dist,
+                "qty_raw": qty_raw,
+                "qty": qty,
+                "notional": notional,
+                "equity": equity,
+                "leverage": self._cfg.leverage,
+                "risk_per_trade": self._cfg.risk_per_trade,
+                "stop_price": stop_price,
+                "tp_price": tp_price,
+                "symbol_cap": self._cfg.max_symbol_exposure,
+                "gross_cap": self._cfg.max_gross_exposure,
+            }}
 
         def _close_market(self, reason: str):
             from nautilus_trader.model.enums import OrderSide, TimeInForce

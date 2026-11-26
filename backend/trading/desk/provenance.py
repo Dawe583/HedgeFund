@@ -24,7 +24,7 @@ import datetime as dt
 
 from sqlalchemy import delete, select
 
-from trading.models import EquityPoint, OpenPosition, Trade
+from trading.models import EquityPoint, OpenPosition, SignalRecord, Trade
 
 
 def _utc_from_ns(ts_ns: int) -> dt.datetime:
@@ -125,6 +125,10 @@ class DeskLedger:
                 entry_dev_ticks=entry_dev,
                 exit_dev_ticks=pos.get("exit_dev_ticks"),
                 entry_lag_bars=entry_lag,
+                # the provenance chain's anchor: the trade points at the
+                # signal bar it came from, which is what the signals table
+                # keys on — trade → signal → sizing chain is walkable in SQL
+                signal_time=pos.get("signal_time"),
             )
             session.add(trade)
             if row_id is not None:
@@ -137,6 +141,33 @@ class DeskLedger:
         session = self._sf()
         try:
             session.add(EquityPoint(bot=bot, equity=equity))
+            session.commit()
+        finally:
+            session.close()
+
+    def signal_observed(self, bot: str, spec: dict, record: dict) -> None:
+        """INSERT one row per non-None emission — the M3 acceptance seam:
+        every signal recorded, including the rejections. Written inside the
+        bar event like every other provenance row: the DB is the record, the
+        kernel's memory is not. `bar_time` is the signal bar's own timestamp,
+        never the arrival clock — the row must survive restarts pointing at
+        the same bar it was decided on."""
+        import json as _json
+
+        session = self._sf()
+        try:
+            session.add(
+                SignalRecord(
+                    bot=bot,
+                    symbol=spec["symbol"],
+                    timeframe=spec.get("timeframe", ""),
+                    bar_time=record["bar_time"],
+                    side=record["side"],
+                    confidence=record["confidence"],
+                    outcome=record["outcome"],
+                    details_json=_json.dumps(record.get("details") or {}, default=str),
+                )
+            )
             session.commit()
         finally:
             session.close()

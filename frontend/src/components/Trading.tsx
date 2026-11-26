@@ -3,7 +3,11 @@ import {
   approveVersion,
   getBacktestRun,
   getBacktestRuns,
+  getModelRegistry,
+  getStrategyPanels,
   getTradingRegistry,
+  getTradingSignalsToday,
+  getValidationQueue,
   isConflict,
   setKillSwitch,
   getTradingDivergence,
@@ -18,13 +22,18 @@ import {
   type TradingDivergenceStatus,
   type RunProvenance,
   type TradingClosedTrade,
+  type TradingModelRegistry,
   type TradingPosition,
   type TradingRailsStatus,
+  type TradingSignalsToday,
   type TradingStatus,
   type TradingStrategy,
+  type TradingStrategyPanel,
+  type TradingValidationQueue,
   type TradingRegistryVersion,
 } from "../api/trading";
 import { Blotter } from "../viz/Blotter";
+import { EquityFanChart } from "../viz/EquityFanChart";
 import { EquityChart } from "../viz/EquityChart";
 import { fromApiCurve } from "../viz/equityData";
 import { EmptyState } from "./Emblem";
@@ -271,6 +280,28 @@ export function RunDetail({ id }: { id: number }) {
               data={fromApiCurve(detail.equity_curve)}
               emptyText="The recorded curve has fewer than two distinct points — not enough to draw."
             />
+          )}
+        </div>
+      </div>
+      <div className="mt-4">
+        <h4 className={statLabelClass}>Equity fan — the permutation null</h4>
+        <div className="mt-1">
+          {detail.equity_fan == null ? (
+            <p className="py-6 text-center text-sm text-ink-soft">
+              No fan recorded — the validation never ran on this run, or the permutation matrix was
+              honestly too large to keep. The verdict stands without it; the fan is the shape of the
+              null, not the verdict itself.
+            </p>
+          ) : (
+            <>
+              <EquityFanChart fan={detail.equity_fan} height={220} />
+              <p className="mt-1 font-mono text-[0.7rem] text-ink-faint">
+                x is the trade step, not a clock — every permutation of the same {detail.trades_count} trades,
+                percentile bands p5/p25/p50/p75/p95 over {detail.equity_fan.initial_capital.toFixed(0)} initial
+                capital, the run&apos;s actual path in the accent. The fan answers where the path could
+                have ended up, never when.
+              </p>
+            </>
           )}
         </div>
       </div>
@@ -780,7 +811,7 @@ export function RailsStrip({ rails }: { rails: TradingRailsStatus }) {
                 <th className="px-3 py-1.5 text-left font-medium">Daily loss</th>
                 <th className="px-3 py-1.5 text-left font-medium">Streak</th>
                 <th className="px-3 py-1.5 text-left font-medium">Cooldown</th>
-                <th className="px-3 py-1.5 text-right font-medium">Exposure</th>
+                <th className="px-3 py-1.5 text-right font-medium" title="symbol / gross notional as percent of the hard caps — caps veto, never resize">Exp/cap</th>
                 <th className="px-3 py-1.5 text-right font-medium">Vetoes</th>
                 <th className="px-3 py-1.5 text-right font-medium">As of</th>
               </tr>
@@ -822,10 +853,27 @@ export function RailsStrip({ rails }: { rails: TradingRailsStatus }) {
                     >
                       {fmtCooldown(b.cooldown_remaining_s)}
                     </td>
-                    <td className="px-3 py-1 text-right tabular-nums text-ink-soft">
-                      {b.exposure
-                        ? `${b.exposure.instrument_notional.toFixed(0)} / ${b.exposure.gross_notional.toFixed(0)}`
-                        : "—"}
+                    <td
+                      className="px-3 py-1 text-right tabular-nums"
+                      title={(() => {
+                        if (!b.exposure || b.equity <= 0) return "exposure not snapshotted — the desk has written no rail state for this bot yet";
+                        const symCap = b.equity * b.exposure.symbol_cap;
+                        const grossCap = b.equity * b.exposure.gross_cap;
+                        return `symbol notional ${b.exposure.instrument_notional.toFixed(0)} of the ${symCap.toFixed(0)} cap (${b.exposure.symbol_cap}× equity) · gross ${b.exposure.gross_notional.toFixed(0)} of the ${grossCap.toFixed(0)} cap (${b.exposure.gross_cap}× equity) — caps are hard: an entry breaching either is vetoed, never resized`;
+                      })()}
+                    >
+                      {b.exposure && b.equity > 0 ? (
+                        <span className="inline-flex flex-col items-end">
+                          <span className={b.exposure.instrument_notional > b.equity * b.exposure.symbol_cap ? "font-medium text-down" : "text-up"}>
+                            s {(b.exposure.instrument_notional / (b.equity * b.exposure.symbol_cap) * 100).toFixed(0)}%
+                          </span>
+                          <span className={b.exposure.gross_notional > b.equity * b.exposure.gross_cap ? "font-medium text-down" : "text-up"}>
+                            g {(b.exposure.gross_notional / (b.equity * b.exposure.gross_cap) * 100).toFixed(0)}%
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-ink-faint">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-1 text-right tabular-nums text-ink-soft">{b.vetoes_total}</td>
                     <td className="px-3 py-1 text-right text-ink-faint">
@@ -1409,6 +1457,431 @@ export function RegistrySection({
 export const RegistrySectionForTest = RegistrySection;
 
 
+/* ---- Today's signals, including the rejected ones --------------------------
+
+   The M3 acceptance surface: every emission the kernel recorded today,
+   rejections first-class beside the entered ones. The outcome vocabulary is
+   the backend's closed set; the badge colours follow the terminal's law —
+   "veto:" is the rails working, which is the loss colour because a veto IS
+   a refusal, never because the palette needed variety. Entered is the gain
+   colour. Everything else is muted ink: a rejection by arithmetic (below
+   confidence, no ATR, position already open) is information, not alarm.
+   Rows carry the sizing chain in a keyboard-openable <details> — the chain
+   is the drill-down, and a drill-down you cannot reach without a mouse is
+   not one. */
+
+function outcomeTone(outcome: string): BadgeTone {
+  if (outcome === "entered") return "up";
+  if (outcome.startsWith("veto:")) return "down";
+  return "muted";
+}
+
+function outcomeLabel(outcome: string): string {
+  return outcome.replace(/^veto:/, "veto · ").replace(/_/g, " ");
+}
+
+function ChainDetails({ details }: { details: Record<string, unknown> }) {
+  const entries = Object.entries(details);
+  if (entries.length === 0) return null;
+  return (
+    <details className="mt-0.5">
+      <summary className="cursor-pointer text-[0.65rem] uppercase tracking-[0.1em] text-ink-faint focus:bg-olive-tint/40">
+        sizing chain
+      </summary>
+      <dl className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 font-mono text-[0.7rem] sm:grid-cols-3">
+        {entries.map(([k, v]) => (
+          <div key={k} className="flex justify-between gap-2">
+            <dt className="text-ink-faint">{k}</dt>
+            <dd className="tabular-nums text-ink">{typeof v === "number" ? v.toPrecision(6) : String(v)}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
+export function SignalsTape({ data }: { data: TradingSignalsToday | null }) {
+  if (data === null) return <p className="text-ink-soft">Loading…</p>;
+  if (data.signals.length === 0) {
+    return (
+      <EmptyState title={`No emissions today (${data.date})`}>
+        Nothing recorded yet — either the engine has not run today, or every strategy stayed silent.
+        Both are facts the tape reports as nothing, never as an error. Rejected signals appear here
+        exactly like entered ones, with the reason they were refused.
+      </EmptyState>
+    );
+  }
+  const counts = new Map<string, number>();
+  for (const s of data.signals) counts.set(s.outcome, (counts.get(s.outcome) ?? 0) + 1);
+  return (
+    <div>
+      <div className="mb-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[0.7rem] uppercase tracking-[0.12em] text-ink-soft">
+        {Array.from(counts.entries()).map(([outcome, n]) => (
+          <span key={outcome}>
+            {outcomeLabel(outcome)} <span className="tabular-nums text-ink">{n}</span>
+          </span>
+        ))}
+      </div>
+      <div className={cardClass + " overflow-x-auto"}>
+        <table className="w-full border-collapse font-mono text-xs">
+          <thead>
+            <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
+              <th className="px-3 py-1.5 text-left font-medium">Time</th>
+              <th className="px-3 py-1.5 text-left font-medium">Bot</th>
+              <th className="px-3 py-1.5 text-left font-medium">Side</th>
+              <th className="px-3 py-1.5 text-right font-medium">Conf</th>
+              <th className="px-3 py-1.5 text-left font-medium">Outcome</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.signals.map((s) => {
+              const provenance = `signal bar ${s.bar_time ? new Date(s.bar_time).toLocaleString() : "not recorded"} · ${s.symbol} ${s.timeframe}`;
+              return (
+                <Fragment key={s.id}>
+                  <tr
+                    tabIndex={0}
+                    className="border-b border-hair last:border-b-0 hover:bg-olive-tint/40 focus:bg-olive-tint/40"
+                    title={provenance}
+                  >
+                    <td className="px-3 py-1 text-ink-soft">{s.created_at ? fmtClock(s.created_at) : "—"}</td>
+                    <td className="px-3 py-1 text-ink">{s.bot}</td>
+                    <td
+                      className={
+                        "px-3 py-1 " +
+                        (s.side === "long" ? "text-up" : s.side === "short" ? "text-down" : "text-ink-soft")
+                      }
+                    >
+                      {s.side}
+                    </td>
+                    <td className="px-3 py-1 text-right tabular-nums text-ink-soft">{s.confidence.toFixed(2)}</td>
+                    <td className="px-3 py-1">
+                      <Badge tone={outcomeTone(s.outcome)} title={provenance}>
+                        {outcomeLabel(s.outcome)}
+                      </Badge>
+                    </td>
+                  </tr>
+                  {Object.keys(s.details).length > 0 && (
+                    <tr className="border-b border-hair last:border-b-0">
+                      <td colSpan={5} className="px-3 pb-1">
+                        <ChainDetails details={s.details} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export const SignalsTapeForTest = SignalsTape;
+
+
+/* ---- The per-strategy panels ----------------------------------------------
+
+   One panel per bot the desk has evidence for: state in lifecycle (joined
+   from the registry rows, absent honestly when the registry owns nothing),
+   the cumulative realized net pnl curve, the paper-vs-backtest divergence
+   reading, and the recent round-trips with the provenance drill-down —
+   trade → signal → sizing chain, expandable per row. The panel union comes
+   from three surfaces on purpose: a bot can have trades without being
+   registered (pre-registry soak rows) and can be registered without ever
+   trading, and both are facts the panel reports rather than merges away. */
+
+function PanelTradeRow({ trade }: { trade: TradingClosedTrade }) {
+  const chain = trade.signal_chain ?? {};
+  const details = (chain.details ?? {}) as Record<string, unknown>;
+  const hasChain = trade.signal_time !== null && trade.signal_time !== undefined;
+  const provenance =
+    trade.signal_time != null
+      ? `signal bar ${new Date(trade.signal_time).toLocaleString()} · gate ${trade.gate_source}` +
+        (Object.keys(details).length > 0 ? " · chain below" : " · emission not recorded — row predates the seam or the recording process died")
+      : "no signal anchor — the row predates the recording seam";
+  return (
+    <div className="border-b border-hair py-1 last:border-b-0" title={provenance}>
+      <div className="flex flex-wrap items-baseline gap-x-3 font-mono text-xs">
+        <span className="text-ink-faint">{fmtClock(trade.exit_time)}</span>
+        <span className={trade.side === "long" ? "text-up" : "text-down"}>{trade.side}</span>
+        <span className="tabular-nums text-ink-soft">{trade.qty}</span>
+        <span className={"tabular-nums font-medium " + (trade.pnl >= 0 ? "text-up" : "text-down")}>
+          {trade.pnl >= 0 ? "+" : ""}
+          {trade.pnl.toFixed(2)}
+        </span>
+        <span className="text-ink-faint">fees {trade.fees.toFixed(2)}</span>
+        {hasChain && Object.keys(details).length === 0 && (
+          <span className="text-[0.65rem] uppercase tracking-[0.1em] text-ink-faint">chain unrecorded</span>
+        )}
+      </div>
+      {Object.keys(details).length > 0 && <ChainDetails details={details} />}
+    </div>
+  );
+}
+
+export function PerStrategyPanels({
+  panels,
+  registry,
+  divergence,
+  trades,
+}: {
+  panels: TradingStrategyPanel[] | null;
+  registry: TradingRegistryVersion[] | null;
+  divergence: TradingDivergenceStatus | null;
+  trades: TradingClosedTrade[] | null;
+}) {
+  if (panels === null) return <p className="text-ink-soft">Loading…</p>;
+  const bots = new Set<string>();
+  for (const p of panels) bots.add(p.bot);
+  for (const v of registry ?? []) bots.add(`${v.strategy_key}-v${v.version}`);
+  for (const b of divergence?.bots ?? []) bots.add(b.bot);
+  if (bots.size === 0) {
+    return (
+      <EmptyState title="No strategy has ever traded">
+        The panels appear per bot the moment the desk settles its first round-trip or the registry
+        registers a version — state in lifecycle, the realized pnl curve, the divergence reading and
+        the trades with their provenance chain. With zero validated strategies the roster is honestly
+        empty: the gate working, not a missing panel.
+      </EmptyState>
+    );
+  }
+  const registryByBot = new Map<string, TradingRegistryVersion>();
+  for (const v of registry ?? []) registryByBot.set(`${v.strategy_key}-v${v.version}`, v);
+  const divergenceByBot = new Map((divergence?.bots ?? []).map((b) => [b.bot, b]));
+  const panelByBot = new Map(panels.map((p) => [p.bot, p]));
+  const tradesByBot = new Map<string, TradingClosedTrade[]>();
+  for (const t of trades ?? []) {
+    const list = tradesByBot.get(t.bot) ?? [];
+    list.push(t);
+    tradesByBot.set(t.bot, list);
+  }
+  return (
+    <div className="space-y-3">
+      {Array.from(bots).sort().map((bot) => {
+        const panel = panelByBot.get(bot);
+        const reg = registryByBot.get(bot);
+        const div = divergenceByBot.get(bot);
+        const botTrades = tradesByBot.get(bot) ?? [];
+        const curve = panel?.curve ?? [];
+        return (
+          <div key={bot} className="border border-rule">
+            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-hair px-3 py-1.5 font-mono text-xs">
+              <span className="font-medium text-ink">{bot}</span>
+              {reg ? (
+                <Badge tone={STATE_TONE[reg.state] ?? "muted"} title={`in lifecycle since ${reg.state_since ?? "unrecorded"} — ${reg.state_evidence || "no evidence note"}`}>
+                  {reg.state}
+                </Badge>
+              ) : (
+                <span className="text-[0.65rem] uppercase tracking-[0.1em] text-ink-faint" title="trades exist for this bot but no registry row carries its name — pre-registry or unregistered evidence">
+                  unregistered
+                </span>
+              )}
+              {panel !== undefined && (
+                <span className="tabular-nums text-ink-soft" title="settled round-trips the desk wrote">
+                  {panel.trades_count} trades
+                </span>
+              )}
+              {div !== undefined && div.fills.measured_fills > 0 && (
+                <span
+                  className={"tabular-nums " + (div.fills.breaches > 0 ? "text-warn" : "text-ink-soft")}
+                  title={`paper-vs-backtest divergence: mean |dev| ${div.fills.mean_abs_dev_ticks?.toFixed(2) ?? "—"} ticks over ${div.fills.measured_fills} measured fills, ${div.fills.breaches} budget breaches`}
+                >
+                  drift {div.fills.mean_abs_dev_ticks?.toFixed(2) ?? "—"}t · {div.fills.breaches} breaches
+                </span>
+              )}
+            </div>
+            <div className="grid gap-3 px-3 py-2 lg:grid-cols-2">
+              <div>
+                <h4 className={statLabelClass}>Cumulative realized net pnl</h4>
+                <div className="mt-1">
+                  {curve.length < 2 ? (
+                    <p className="py-6 text-center text-sm text-ink-soft">
+                      {curve.length === 0
+                        ? "No settled round-trips — a curve of zero trades is not a curve."
+                        : "One settled trade — a single point is not a curve."}
+                    </p>
+                  ) : (
+                    <EquityChart
+                      data={fromApiCurve(curve)}
+                      height={160}
+                      emptyText="The recorded curve has fewer than two distinct points — not enough to draw."
+                    />
+                  )}
+                </div>
+              </div>
+              <div>
+                <h4 className={statLabelClass}>Recent round-trips</h4>
+                <div className="mt-1">
+                  {botTrades.length === 0 ? (
+                    <p className="py-6 text-center text-sm text-ink-soft">
+                      Nothing settled yet — the first close writes the first row.
+                    </p>
+                  ) : (
+                    botTrades.slice(0, 8).map((t) => <PanelTradeRow key={t.id} trade={t} />)
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export const PerStrategyPanelsForTest = PerStrategyPanels;
+
+
+/* ---- The validation queue and the model registry ---------------------------
+
+   RESEARCH surfaces: who waits at the gates, and what the gate said when it
+   refused. The failure rows carry the reasons verbatim — the gate's own
+   sentences, never paraphrased, because a paraphrase is an opinion about
+   evidence. */
+
+export function ValidationQueuePanel({ queue }: { queue: TradingValidationQueue | null }) {
+  if (queue === null) return <p className="text-ink-soft">Loading…</p>;
+  if (queue.awaiting.length === 0 && queue.failures.length === 0) {
+    return (
+      <EmptyState title="Nothing in flight, nothing failed">
+        No version sits in research state and no validation has failed — a pipeline with nothing to
+        answer for right now. Versions appear here the moment one is registered, and failures stay
+        visible with the reasons the gate wrote.
+      </EmptyState>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      {queue.awaiting.length > 0 && (
+        <div>
+          <h4 className={statLabelClass}>Awaiting the gates</h4>
+          <div className="mt-1 space-y-0.5 font-mono text-xs">
+            {queue.awaiting.map((item) => (
+              <div
+                key={`a-${item.version_id}`}
+                tabIndex={0}
+                className="flex flex-wrap items-baseline gap-x-3 border-b border-hair px-2 py-1 last:border-b-0 hover:bg-olive-tint/40 focus:bg-olive-tint/40"
+                title={`registered ${item.created_at ? fmtDay(item.created_at) : "unrecorded"} — no validation verdict exists for this version yet`}
+              >
+                <span className="text-ink">
+                  {item.strategy_key}-v{item.version}
+                </span>
+                <span className="text-ink-soft">{item.timeframe}</span>
+                <Badge tone="muted">research</Badge>
+                <span className="text-ink-faint">no verdict yet — the gate has not run on this version</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {queue.failures.length > 0 && (
+        <div>
+          <h4 className={statLabelClass}>Failures, with the gate&apos;s reasons</h4>
+          <div className="mt-1 space-y-1">
+            {queue.failures.map((item) => (
+              <div
+                key={`f-${item.validation_id}`}
+                tabIndex={0}
+                className="border-l-2 border-down bg-down-tint/40 px-3 py-1.5 focus:bg-down-tint/60"
+                title={`validation #${item.validation_id} · ${item.created_at ? fmtDay(item.created_at) : ""} · ${item.trades_n} trades of the required ${item.min_trades_required}`}
+              >
+                <div className="flex flex-wrap items-baseline gap-x-3 font-mono text-xs">
+                  <span className="text-ink">{item.bot}</span>
+                  <span className="text-ink-soft">{item.timeframe}</span>
+                  <Badge tone="down">{item.verdict ?? "rejected"}</Badge>
+                  {item.permutation_p !== null && (
+                    <span className="tabular-nums text-ink-soft" title="permutation test p-value">
+                      p {fmtP(item.permutation_p)}
+                    </span>
+                  )}
+                  <span className="tabular-nums text-ink-faint" title="trades in the run against the gate's minimum">
+                    {item.trades_n}/{item.min_trades_required} trades
+                  </span>
+                </div>
+                {item.reasons.length > 0 && (
+                  <ul className="mt-0.5 space-y-0.5 font-mono text-[0.7rem] text-ink-soft">
+                    {item.reasons.map((r) => (
+                      <li key={r}>· {r}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export const ValidationQueuePanelForTest = ValidationQueuePanel;
+
+
+export function ModelRegistryPanel({ registry }: { registry: TradingModelRegistry | null }) {
+  if (registry === null) return <p className="text-ink-soft">Loading…</p>;
+  return (
+    <div>
+      {registry.models.length === 0 ? (
+        <EmptyState title="No model has ever trained">
+          The ML gate&apos;s registry is empty: no retrain cycle has written a champion or a rejected
+          challenger. When one does, the OOS metrics the promotion gate measured appear here beside
+          the role — champion, challenger or retired.
+        </EmptyState>
+      ) : (
+        <div className={cardClass + " overflow-x-auto"}>
+          <table className="w-full border-collapse font-mono text-xs">
+            <thead>
+              <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
+                <th className="px-3 py-1.5 text-left font-medium">Model</th>
+                <th className="px-3 py-1.5 text-left font-medium">Role</th>
+                <th className="px-3 py-1.5 text-right font-medium">OOS acc</th>
+                <th className="px-3 py-1.5 text-right font-medium">OOS prec long</th>
+                <th className="px-3 py-1.5 text-right font-medium">Window</th>
+                <th className="px-3 py-1.5 text-right font-medium">PSI drift</th>
+                <th className="px-3 py-1.5 text-left font-medium">Trained</th>
+              </tr>
+            </thead>
+            <tbody>
+              {registry.models.map((m) => (
+                <tr
+                  key={m.id}
+                  tabIndex={0}
+                  className="border-b border-hair last:border-b-0 hover:bg-olive-tint/40 focus:bg-olive-tint/40"
+                  title={m.notes || `model ${m.id}`}
+                >
+                  <td className="px-3 py-1 text-ink">
+                    {m.name} v{m.version}
+                  </td>
+                  <td className="px-3 py-1">
+                    <Badge
+                      tone={m.role === "champion" ? "up" : "muted"}
+                      title={m.role === "champion" ? "the gate's live weights" : m.role === "challenger" ? "newest version of its name, not the champion" : "superseded"}
+                    >
+                      {m.role}
+                    </Badge>
+                  </td>
+                  <td className="px-3 py-1 text-right tabular-nums text-ink">{m.oos_accuracy.toFixed(3)}</td>
+                  <td className="px-3 py-1 text-right tabular-nums text-ink">{m.oos_precision_long.toFixed(3)}</td>
+                  <td className="px-3 py-1 text-right tabular-nums text-ink-soft">{m.train_window_days}d</td>
+                  <td className="px-3 py-1 text-right text-ink-faint" title={registry.psi_note}>
+                    {m.psi_drift === null ? "—" : m.psi_drift.toFixed(3)}
+                  </td>
+                  <td className="px-3 py-1 text-ink-faint">{m.trained_at ? fmtDay(m.trained_at) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="mt-1 font-mono text-[0.7rem] text-ink-faint">{registry.psi_note}</p>
+    </div>
+  );
+}
+
+export const ModelRegistryPanelForTest = ModelRegistryPanel;
+
+
 /* ---- The page ------------------------------------------------------------ */
 
 export default function Trading() {
@@ -1429,6 +1902,10 @@ export default function Trading() {
   const [registryError, setRegistryError] = useState<string | null>(null);
   const [railsReloadKey, setRailsReloadKey] = useState(0);
   const [registryReloadKey, setRegistryReloadKey] = useState(0);
+  const [signalsToday, setSignalsToday] = useState<TradingSignalsToday | null>(null);
+  const [panels, setPanels] = useState<TradingStrategyPanel[] | null>(null);
+  const [queue, setQueue] = useState<TradingValidationQueue | null>(null);
+  const [models, setModels] = useState<TradingModelRegistry | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -1469,6 +1946,26 @@ export default function Trading() {
         /* same discipline as the other evidence strips — its failure
            renders as no strip, never as a blank page */
       });
+    getTradingSignalsToday()
+      .then((s) => alive && setSignalsToday(s))
+      .catch(() => {
+        /* supplementary evidence — failure renders as no tape, never a blank page */
+      });
+    getStrategyPanels()
+      .then((p) => alive && setPanels(p))
+      .catch(() => {
+        /* same discipline */
+      });
+    getValidationQueue()
+      .then((q) => alive && setQueue(q))
+      .catch(() => {
+        /* same discipline */
+      });
+    getModelRegistry()
+      .then((m) => alive && setModels(m))
+      .catch(() => {
+        /* same discipline */
+      });
     return () => {
       alive = false;
     };
@@ -1487,7 +1984,7 @@ export default function Trading() {
 
       <Section
         title="Positions & risk"
-        hint="Open positions as the desk wrote them at the fill — the protective levels each row carries, ages ticking. Settled round-trips below as the desk's recent evidence."
+        hint="Open positions as the desk wrote them at the fill, ages ticking. Each row's stop and target ARE the open orders — the resting protective brackets the kernel holds for the position, submitted at the entry fill. Settled round-trips below as the desk's recent evidence."
       >
         {rails !== null && <RailsStrip rails={rails} />}
         {divergence !== null && <DivergenceStrip divergence={divergence} />}
@@ -1499,6 +1996,25 @@ export default function Trading() {
           error={positionsError}
           budgets={divergenceBudgetsOf(divergence)}
         />
+        {signalsToday !== null && (
+          <div className="mt-4">
+            <h4 className={statLabelClass}>Today&apos;s signals — rejections included</h4>
+            <div className="mt-1">
+              <SignalsTape data={signalsToday} />
+            </div>
+          </div>
+        )}
+        <div className="mt-4">
+          <h4 className={statLabelClass}>Per strategy</h4>
+          <div className="mt-1">
+            <PerStrategyPanels
+              panels={panels}
+              registry={registry}
+              divergence={divergence}
+              trades={trades}
+            />
+          </div>
+        </div>
       </Section>
 
       <Section
@@ -1518,6 +2034,18 @@ export default function Trading() {
         note="Figures come from the run row itself — hover any number for its run and date. A run without validation shows dashes, not zeros."
       >
         <ResearchSection runs={runs} error={runsError} />
+        <div className="mt-4">
+          <h4 className={statLabelClass}>Validation queue</h4>
+          <div className="mt-1">
+            <ValidationQueuePanel queue={queue} />
+          </div>
+        </div>
+        <div className="mt-4">
+          <h4 className={statLabelClass}>Model registry</h4>
+          <div className="mt-1">
+            <ModelRegistryPanel registry={models} />
+          </div>
+        </div>
       </Section>
 
       <Section

@@ -116,6 +116,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Alerts Stream
+         * @description The in-app alert stream: rail events, validation failures, stale
+         *     heartbeats, reconciliation gaps — severity-typed, newest first. Delivery
+         *     stays in-app per the design; nothing here pages anyone.
+         */
+        get: operations["alerts_stream_api_alerts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cash-anchors": {
         parameters: {
             query?: never;
@@ -1006,6 +1028,73 @@ export interface paths {
          *     there was a choice.
          */
         get: operations["search_instruments_api_instruments_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/intelligence/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Intelligence Budget
+         * @description Day spend against the free-tier caps, read from the same counter file
+         *     the desk claims against. No file means no call was ever claimed:
+         *     available false, not a zero — a zero would claim the day started.
+         */
+        get: operations["intelligence_budget_api_intelligence_budget_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/intelligence/feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Intelligence Feed
+         * @description The unified stream, newest first, filterable by source prefix and
+         *     kind. `sources` answers what IS there before the filter, so an empty
+         *     filtered page can be told apart from an empty desk.
+         */
+        get: operations["intelligence_feed_api_intelligence_feed_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/intelligence/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Intelligence Memory
+         * @description The layered memory as the learning loop persists it: working (raw
+         *     outcomes, decay fast), shallow (lessons), deep (reflections, durable).
+         *     Unpruned rows are shown as stored — decay is the loop's business, the
+         *     browser reports what is there.
+         */
+        get: operations["intelligence_memory_api_intelligence_memory_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2424,6 +2513,45 @@ export interface components {
             targets?: components["schemas"]["PlanTargetWrite"][];
         };
         /**
+         * AlertItem
+         * @description One alert in the unified stream, severity-typed. `kind` names what
+         *     fired (rail-veto, validation-rejected, engine-stale, reconciliation-gap);
+         *     `ts` is when it happened for events, when it was measured for states.
+         */
+        AlertItem: {
+            /** Detail */
+            detail: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "info" | "warning" | "critical";
+            /** Source */
+            source: string;
+            /** Title */
+            title: string;
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+        };
+        /**
+         * AlertsStream
+         * @description The alerts stream, newest first. `available` false means nothing
+         *     behind it could be read at all; an empty `items` with available true is
+         *     the desk in good health, which is a first-class answer and not a missing
+         *     page.
+         */
+        AlertsStream: {
+            /** Available */
+            available: boolean;
+            /** Items */
+            items: components["schemas"]["AlertItem"][];
+        };
+        /**
          * AllocationSlice
          * @description One country/sector with its weight (percent, 0-100).
          */
@@ -2544,6 +2672,17 @@ export interface components {
              * @description An ISO code the ECB reference-rate feed quotes, e.g. EUR, USD
              */
             base_currency: string;
+        };
+        /**
+         * BudgetTierCap
+         * @description One priority tier's effective daily cap: the RESERVE fraction of the
+         *     day's budget above which the tier stops spending (agents/budget.py).
+         */
+        BudgetTierCap: {
+            /** Cap */
+            cap: number;
+            /** Tier */
+            tier: string;
         };
         /**
          * CashAnchorCreate
@@ -4538,6 +4677,107 @@ export interface components {
             state: "ready" | "downloading" | "failed" | "not_started";
         };
         /**
+         * IntelligenceBudget
+         * @description The day's request spend against the free-tier ceiling. `available`
+         *     false means no counter file exists — no LLM call has ever been claimed
+         *     on this machine — which is a state of the desk, not a failure.
+         *
+         *     The counter is a single shared tally (agents/budget.py by design): the
+         *     per-tier CAPS are policy, but there is no per-tier SPEND to report, and
+         *     none is fabricated.
+         */
+        IntelligenceBudget: {
+            /** Available */
+            available: boolean;
+            /**
+             * Daily Budget
+             * @default 0
+             */
+            daily_budget?: number;
+            /** Day */
+            day?: string | null;
+            /**
+             * Remaining
+             * @default 0
+             */
+            remaining?: number;
+            /**
+             * Rpm Budget
+             * @default 0
+             */
+            rpm_budget?: number;
+            /**
+             * Tier Caps
+             * @default []
+             */
+            tier_caps?: components["schemas"]["BudgetTierCap"][];
+            /**
+             * Used
+             * @default 0
+             */
+            used?: number;
+        };
+        /**
+         * IntelligenceFeed
+         * @description The stream, newest first. `sources` lists the sources present in the
+         *     underlying stores BEFORE filtering, so the filter control can name real
+         *     choices instead of guessing.
+         */
+        IntelligenceFeed: {
+            /** Available */
+            available: boolean;
+            /** Items */
+            items: components["schemas"]["IntelligenceFeedItem"][];
+            /** Sources */
+            sources: string[];
+        };
+        /**
+         * IntelligenceFeedItem
+         * @description One row of the unified stream: a wealth chain run or a trading agent
+         *     insight, in the shape both share — when, who said it, what kind of thing
+         *     it is, and one line of it. `ref` is the API path of the full document
+         *     when one exists; null means the row itself is all there is.
+         */
+        IntelligenceFeedItem: {
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref?: string | null;
+            /**
+             * Severity
+             * @default info
+             */
+            severity?: string;
+            /** Source */
+            source: string;
+            /** Summary */
+            summary: string;
+            /** Title */
+            title: string;
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+        };
+        /**
+         * IntelligenceMemory
+         * @description The memory browser's answer. `available` false means the agent memory
+         *     table is not there to read (engine never ran, unmigrated database) — the
+         *     panel says so instead of showing an empty browser that implies memory
+         *     was empty.
+         */
+        IntelligenceMemory: {
+            /** Available */
+            available: boolean;
+            /** Deep */
+            deep: components["schemas"]["MemoryEntry"][];
+            /** Shallow */
+            shallow: components["schemas"]["MemoryEntry"][];
+            /** Working */
+            working: components["schemas"]["MemoryEntry"][];
+        };
+        /**
          * IsinSuggestion
          * @description A best-effort ISIN -> ticker suggestion from OpenFIGI.
          */
@@ -4775,6 +5015,34 @@ export interface components {
             pct: number;
             /** Region */
             region: string;
+        };
+        /**
+         * MemoryEntry
+         * @description One memory event as the learning loop wrote it. Tier and kind are the
+         *     loop's own vocabulary (working/shallow/deep; outcome/lesson/reflection);
+         *     importance is its 0..1 salience, pnl_pct the outcome's result when the
+         *     event came from a trade.
+         */
+        MemoryEntry: {
+            /** Bot */
+            bot: string;
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: number;
+            /** Importance */
+            importance: number;
+            /** Kind */
+            kind: string;
+            /** Pnl Pct */
+            pnl_pct: number | null;
+            /** Tier */
+            tier: string;
         };
         /**
          * NetWorthPoint
@@ -7714,6 +7982,26 @@ export interface operations {
             };
         };
     };
+    alerts_stream_api_alerts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertsStream"];
+                };
+            };
+        };
+    };
     list_all_cash_anchors_api_cash_anchors_get: {
         parameters: {
             query?: never;
@@ -9351,6 +9639,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstrumentSearch"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    intelligence_budget_api_intelligence_budget_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntelligenceBudget"];
+                };
+            };
+        };
+    };
+    intelligence_feed_api_intelligence_feed_get: {
+        parameters: {
+            query?: {
+                kind?: string | null;
+                limit?: number;
+                source?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntelligenceFeed"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    intelligence_memory_api_intelligence_memory_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntelligenceMemory"];
                 };
             };
             /** @description Validation Error */

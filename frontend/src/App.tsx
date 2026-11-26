@@ -8,6 +8,7 @@ import { getBaseCurrency } from "./api/baseCurrency";
 import { ensureCatalogue } from "./api/instruments";
 import { catchUp, type CatchUpResult } from "./api/transactions";
 import Dashboard from "./components/Dashboard";
+import Intel from "./components/Intel";
 import Portfolio from "./components/Portfolio";
 import Records, { type RecordsPage } from "./components/Records";
 import Profile from "./components/Profile";
@@ -46,6 +47,7 @@ const TABS = [
   { key: "dashboard", label: "Dashboard", wide: true },
   { key: "portfolio", label: "Portfolio", wide: true },
   { key: "trading", label: "Trading", wide: true },
+  { key: "intel", label: "Intel", wide: true },
   { key: "records", label: "Records", wide: true },
   { key: "profile", label: "Profile", wide: false },
 ] as const;
@@ -307,7 +309,7 @@ export default function App() {
   // already allows, and what "nothing honest to say" is for. When the backend
   // learns the trading page kind, this branch sends it.
   let page: ChatPage | null;
-  if (tab === "trading" && reading === null) page = null;
+  if ((tab === "trading" || tab === "intel") && reading === null) page = null;
   else if (reading === "list") page = { kind: "analyses" };
   else if (reading !== null) page = { kind: "analysis", run_id: reading };
   else if (tab === "records" && recordsPage === "wealth" && account !== null)
@@ -320,7 +322,7 @@ export default function App() {
   else if (tab === "records" && recordsPage === "debts" && debt !== null)
     page = { kind: "debt", liability_id: debt.id };
   else if (tab === "records") page = { kind: "records", section: recordsPage };
-  else if (tab === "trading") page = null; // unreachable with reading null, but never a lie
+  else if (tab === "trading" || tab === "intel") page = null; // unreachable with reading null, but never a lie
   else page = { kind: tab };
 
   // A term in that sentence, pressed. The tab moves, the sub-page moves with
@@ -538,6 +540,8 @@ export default function App() {
                   <Trading />
                 </Suspense>
               )}
+              {tab === "intel" && <Intel />}
+
               {tab === "records" && (
                 <Records
                   page={recordsPage}

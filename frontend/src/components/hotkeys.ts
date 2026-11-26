@@ -44,7 +44,7 @@ export function typingTarget(target: unknown): boolean {
 /** The sections the digit keys reach, in the tab strip's own order: the key
     is the position, and the position is printed in the key sheet — the strip
     itself is the documentation. Indexed from 1, as rows of keys are. */
-export const SECTION_KEYS = ["dashboard", "portfolio", "trading", "records", "profile"] as const;
+export const SECTION_KEYS = ["dashboard", "portfolio", "trading", "intel", "records", "profile"] as const;
 export type SectionKey = (typeof SECTION_KEYS)[number];
 
 /** What a keydown means for the shell. `section` carries the 1-based digit;
@@ -70,9 +70,9 @@ export function readHotkey(key: string, target: unknown, ctrl: boolean, meta: bo
 /* The key sheet's rows, as data: the furniture documents itself from the
    same table the tests read, so the sheet can never drift from the wiring. */
 export const KEY_SHEET: { keys: string; does: string }[] = [
-  { keys: "1 – 5", does: "Go to a section, in the strip's order: Dashboard, Portfolio, Trading, Records, Profile" },
+  { keys: "1 – 6", does: "Go to a section, in the strip's order: Dashboard, Portfolio, Trading, Intel, Records, Profile" },
   { keys: "?", does: "Open or close this sheet" },
   { keys: "Esc", does: "Close this sheet" },
-  { keys: "↑ ↓", does: "Move between runs in the research record" },
+  { keys: "↑ ↓", does: "Move between runs in the research record, scan the intelligence stream" },
   { keys: "Enter", does: "Open or close a run's detail" },
 ];

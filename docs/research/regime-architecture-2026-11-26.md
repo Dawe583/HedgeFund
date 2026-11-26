@@ -92,3 +92,26 @@ count of profitable windows to per-window Sharpe series with the decay
 shape visible, so that a candidate whose edge concentrates in one
 regime window reads as what it is. Small, honest, and it changes what
 the gate can see. Declared here, in writing, before implementation.
+
+## Edge decay — first direct measurement (same evening)
+
+The walk-forward window series is now persisted in the ledger
+(`wf_windows_json`, additive migration — the series was computed in every
+validation and discarded before, which made decay unmeasurable in
+principle). Recomputed deterministically for F7's validation cluster with
+the sweep's own rails-off config:
+
+| candidate | window Sharpes (5 x in-sample) | slope |
+|---|---|---|
+| cont-D48-e1.5-x0.6-s3.0 ETH | [+2.94, +2.19, +3.09, **−0.61**, +2.20] | −0.43/window |
+| cont-D48-e2.0-x0.6-s3.0 ETH | [+2.79, +2.19, +3.10, **−0.61**, +2.20] | −0.40/window |
+
+The shape is NOT gradual decay: four strong windows, one dead window, then
+strength again — and out-of-sample death at −0.31 across the board. The
+honest reading: the edge is real but conditional, switching off for months
+at a time (window 4 in-sample, the whole OOS window). That is exactly the
+regime-dependence F8's gate hypothesizes — entries in the wrong regime are
+the losses, and a filter that skips them converts the same entries into a
+positive system. Whether the efficiency-ratio gate actually separates
+those regimes is what the F8 sweep, launched against the same in-sample
+window tonight, measures.

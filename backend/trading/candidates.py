@@ -93,3 +93,46 @@ def meanrev_regime_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]
 
 
 GRIDS = {"F1": trend_momentum_candidates, "F5": meanrev_regime_candidates}
+
+F7_DEV_LOOKBACKS = [24, 48]
+F7_ENTRY_DEV = [1.5, 2.0, 2.5]
+F7_EXIT_DEV = [0.3, 0.6]
+F7_STOP_ATR = [3.0, 4.0]  # wider than F5 — continuation stops die to noise at fade widths
+
+
+def continuation_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
+    """The F7 grid: 2×3×2×2 = 24 minus broken state machines, inside the
+    declared budget of 20. Same validity rule as F5: exit_dev < entry_dev
+    strictly. The mirror deliberately shares F5's deviation grid so the two
+    families' ledgers read against each other cell-for-cell."""
+    from trading.bots.continuation_bot import Continuation1h
+
+    out = []
+    for dev_lb in F7_DEV_LOOKBACKS:
+        for entry in F7_ENTRY_DEV:
+            for exit_dev in F7_EXIT_DEV:
+                for stop in F7_STOP_ATR:
+                    if exit_dev >= entry:
+                        continue
+                    params = {
+                        "dev_lookback": dev_lb,
+                        "entry_dev": entry,
+                        "exit_dev": exit_dev,
+                        "stop_atr": stop,
+                    }
+                    name = f"cont-D{dev_lb}-e{entry}-x{exit_dev}-s{stop}"
+                    out.append(
+                        Candidate(
+                            family="F7-continuation",
+                            name=name,
+                            bot_key="continuation1h",
+                            params=params,
+                            make=lambda p: Continuation1h(**p),
+                            symbols=list(symbols),
+                            timeframe="1h",
+                        )
+                    )
+    return out
+
+
+GRIDS["F7"] = continuation_candidates

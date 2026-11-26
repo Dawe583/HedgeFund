@@ -21,6 +21,7 @@ dependencies = [
     "yfinance>=1.7.0",
     "nautilus-trader==1.231.0",
     "scikit-learn>=1.9.1",
+    "ccxt>=4.5.94",
 ]
 
 [dependency-groups]

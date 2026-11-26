@@ -36,6 +36,7 @@ import logging
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pandas as pd
 
@@ -279,3 +280,27 @@ def evaluate_candidate(
     }
     row_id = ledger_append(conn, row)
     return {"id": row_id, **row, "core": core}
+
+
+def export_ledger_snapshot(db_path: str, out_path: str | None = None) -> str:
+    """Write the full search ledger as JSON for the public research portal.
+
+    The portal deploys from CI where research.db (460MB, gitignored market
+    data) cannot exist; the ledger itself is half a megabyte of pure
+    evidence. The snapshot is a research artifact committed to the repo —
+    privacy-safe by construction: it contains strategy measurements, never
+    positions, wealth records, or anything from data.db."""
+    if out_path is None:
+        out_path = str(Path(db_path).parent / "ledger_snapshot.json")
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        cols = [d[1] for d in conn.execute("PRAGMA table_info(search_ledger)").fetchall()]
+        rows = conn.execute("select * from search_ledger order by id").fetchall()
+    finally:
+        conn.close()
+    payload = {
+        "exported_at": pd.Timestamp.now(tz="UTC").isoformat(),
+        "rows": [dict(zip(cols, r)) for r in rows],
+    }
+    Path(out_path).write_text(json.dumps(payload))
+    return out_path

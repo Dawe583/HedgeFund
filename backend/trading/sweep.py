@@ -300,6 +300,16 @@ def main(argv=None) -> int:
     validated = sum(1 for r in results if r.get("verdict") == "validated")
     errors = sum(1 for r in results if r.get("verdict") == "error")
     print(json.dumps({"event": "sweep_done", "cells": len(results), "validated": validated,
+    # public evidence snapshot (research portal, 2026-11-27): every sweep
+    # refreshes the committed ledger export so the portal never goes stale.
+    # Append-only evidence, published in full — that is the program's brand.
+    try:
+        from trading.search import export_ledger_snapshot
+
+        export_ledger_snapshot(ledger_path)
+    except Exception:
+        pass  # the sweep's own output is primary; the snapshot is a mirror
+
                       "errors": errors, "phase": args.phase}), flush=True)
     return 0 if errors == 0 else 1
 

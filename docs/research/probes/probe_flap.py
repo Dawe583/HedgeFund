@@ -49,14 +49,20 @@ from pathlib import Path
 
 
 class ConnectProxy:
-    def __init__(self, host="127.0.0.1", port=0):
+    def __init__(self, host="127.0.0.1", port=0, mode="hard"):
+        """mode 'hard': killing the proxy severs TCP — the flap-probe shape.
+        mode 'blackhole': 'killing' stops forwarding bytes but keeps every
+        socket open — writes succeed into a void, no RST, no FIN. That is
+        the heartbeat-timeout path, a different controller state than
+        write-failure, and the 2026-11-26 soak's more plausible killer."""
         self._host = host
         self._port = port
+        self.mode = mode
         self._server = None
         self._loop = None
         self._thread = None
         self._tunnels = []
-
+        self._dropping = False  # blackhole: pipes alive, bytes swallowed
     @property
     def url(self):
         return f"http://{self._host}:{self._port}"
@@ -67,6 +73,10 @@ class ConnectProxy:
                 data = await reader.read(65536)
                 if not data:
                     break
+                if self._dropping:
+                    # blackhole partition: the byte stream vanishes into the
+                    # void — the socket stays open, nothing ever answers
+                    continue
                 writer.write(data)
                 await writer.drain()
         except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError, OSError):
@@ -76,6 +86,10 @@ class ConnectProxy:
                 writer.close()
             except OSError:
                 pass
+
+    def blackhole(self, on: bool):
+        """Open/close the silent void. Only meaningful in blackhole mode."""
+        self._dropping = on
 
     async def _handle(self, client_reader, client_writer):
         try:
@@ -195,12 +209,13 @@ def boot_desk(proxy_url: str):
 
 def main():
     cycles = int(sys.argv[1]) if len(sys.argv) > 1 else 8
+    mode = sys.argv[2] if len(sys.argv) > 2 else "hard"
     flap_s = 70.0
     observe_s = 150.0
 
-    print(json.dumps({"event": "probe_start", "cycles": cycles, "flap_s": flap_s}), flush=True)
+    print(json.dumps({"event": "probe_start", "cycles": cycles, "flap_s": flap_s, "mode": mode}), flush=True)
 
-    proxy = ConnectProxy()
+    proxy = ConnectProxy(mode=mode)
     proxy.start()
     print(json.dumps({"event": "proxy_up", "url": proxy.url}), flush=True)
 
@@ -218,6 +233,20 @@ def main():
         now = time.monotonic()
         return any(now - b < window for b in beats.values())
 
+    def partition(open_it: bool):
+        """Open/close the partition in the probe's mode. Hard kills the
+        proxy (TCP severs, write-failure path); blackhole only swallows
+        bytes (heartbeat-timeout path) and the proxy never dies."""
+        if mode == "blackhole":
+            proxy.blackhole(open_it)
+            return None
+        if open_it:
+            proxy.stop()
+            return None
+        fresh = ConnectProxy(port=proxy._port)
+        fresh.start()
+        return fresh
+
     results = []
     try:
         # warm-up: wait for the first live bar so the stream is proven working
@@ -230,11 +259,12 @@ def main():
         for cycle in range(cycles):
             rec = {"cycle": cycle}
             # --- partition
-            proxy.stop()
+            partition(True)
             rec["partition_open"] = round(time.time(), 1)
             time.sleep(flap_s)
-            proxy = ConnectProxy(port=proxy._port)
-            proxy.start()
+            fresh = partition(False)
+            if fresh is not None:
+                proxy = fresh
             rec["partition_close"] = round(time.time(), 1)
 
             # --- observe: quotes resume? bars resume?

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from pathlib import Path
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,6 +24,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.schemas_trading import (
     ApproveRequest,
+    AuditChainVerification,
+    AuditSignoffCreateRequest,
+    MandateCreateRequest,
+    OrderCardConfirmRequest,
+    OrderCardCreateRequest,
+    TradingMandates,
+    TradingOrderCards,
     KillSwitchRequest,
     KillSwitchState,
     TradingApprovalResult,
@@ -1267,3 +1275,378 @@ def approve_version(version_id: int, req: ApproveRequest, db: Session = Depends(
         "evidence": state_row.evidence,
         "fingerprint": req.fingerprint,
     }
+
+
+# --------------------------------------------------------------------------
+# M5 — the mandate machinery, built but never armed.
+#
+# The endpoints below are the ONLY write paths into the mandate layer, and
+# every one of them is human-shaped: the mandate's caps are echoed in full
+# in the request body (the human types the numbers — a consent the machine
+# prefilled is no consent), the signoff names the audit document, the card
+# confirmation carries its fingerprint. There is no automation path to any
+# of them: the AI rule extends to trading as "the model may never touch a
+# mandate" (design §6). The honest-empty answer is first-class everywhere:
+# in M5's expected end state no mandate exists and no card has ever been
+# exercised, and that emptiness is the design working, not a missing panel.
+
+
+def _mandate_payload(row) -> dict:
+    from trading.mandate import mandate_expiry, mandate_integrity_ok
+
+    expiry = mandate_expiry(row)
+    now = dt.datetime.now(dt.UTC)
+    return {
+        "id": row.id,
+        "version_id": row.version_id,
+        "created_at": row.created_at,
+        "created_by": row.created_by,
+        "max_order_notional": row.max_order_notional,
+        "max_exposure": row.max_exposure,
+        "instruments": json.loads(row.instruments_json or "[]"),
+        "max_trades_per_day": row.max_trades_per_day,
+        "consent_days": row.consent_days,
+        "funding_min": row.funding_min,
+        "funding_max": row.funding_max,
+        "note": row.note,
+        "mandate_hash": row.mandate_hash,
+        "expires_at": expiry,
+        "active": expiry > now,
+        "integrity_ok": mandate_integrity_ok(row),
+    }
+
+
+@router.get("/mandates", response_model=TradingMandates)
+def list_mandates(db: Session = Depends(get_trading_db)) -> dict:
+    """Every mandate row ever written, newest first — immutability means
+    history is part of the surface: a superseded mandate is still the
+    consent older decisions stood on. Empty is the honest M5 end state:
+    no mandate exists, the live path is unbuilt by design."""
+    if not _tables_present(db):
+        return {"mandates": []}
+    try:
+        from trading.models import StrategyMandate
+
+        rows = (
+            db.execute(select(StrategyMandate).order_by(StrategyMandate.id.desc()))
+            .scalars()
+            .all()
+        )
+        return {"mandates": [_mandate_payload(r) for r in rows]}
+    except (OperationalError, SQLAlchemyError):
+        return {"mandates": []}
+
+
+@router.post("/mandates", response_model=TradingMandates)
+def create_mandate_endpoint(req: MandateCreateRequest, db: Session = Depends(get_trading_db)) -> dict:
+    """The human confirmation flow — the ONLY write path for mandates.
+
+    The full cap set must arrive in the body, typed by the human. Every cap
+    is a required field because the mandate IS the consent: a machine that
+    fills in the numbers for you manufactures permission nobody granted.
+    There is no update path anywhere — a new mandate is a new row
+    superseding the old by id, so the audit chain can always quote exactly
+    which consent an order stood on. The write lands in the audit ledger
+    (actor 'human') in the same transaction: a mandate without its audit
+    row is a half-written consent, and half-written consent is nothing."""
+    _require_trading_tables(db)
+    from trading.mandate import append_audit, create_mandate
+
+    version = db.get(StrategyVersion, req.version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail=f"strategy version {req.version_id} is not registered")
+    if not req.instruments:
+        raise HTTPException(status_code=422, detail="instruments must name at least one symbol — an empty list is a mandate over nothing")
+    for cap, name in (
+        (req.max_order_notional, "max_order_notional"),
+        (req.max_exposure, "max_exposure"),
+        (req.funding_max, "funding_max"),
+    ):
+        if cap <= 0:
+            raise HTTPException(status_code=422, detail=f"{name} must be positive — a zero cap is a refusal, not a mandate")
+    if req.funding_min < 0 or req.funding_min >= req.funding_max:
+        raise HTTPException(status_code=422, detail="funding bounds are incoherent — funding_min must be below funding_max")
+    if req.max_trades_per_day <= 0:
+        raise HTTPException(status_code=422, detail="max_trades_per_day must be positive")
+    row = create_mandate(
+        db,
+        version_id=req.version_id,
+        caps={
+            "max_order_notional": req.max_order_notional,
+            "max_exposure": req.max_exposure,
+            "instruments": req.instruments,
+            "max_trades_per_day": req.max_trades_per_day,
+            "consent_days": req.consent_days,
+            "funding_min": req.funding_min,
+            "funding_max": req.funding_max,
+        },
+        created_by="operator-ui",
+        note=req.note.strip(),
+    )
+    append_audit(
+        db,
+        "human",
+        "mandate_created",
+        {
+            "mandate_id": row.id,
+            "version_id": req.version_id,
+            "mandate_hash": row.mandate_hash,
+            "caps": {
+                "max_order_notional": row.max_order_notional,
+                "max_exposure": row.max_exposure,
+                "instruments": json.loads(row.instruments_json),
+                "max_trades_per_day": row.max_trades_per_day,
+                "consent_days": row.consent_days,
+                "funding_min": row.funding_min,
+                "funding_max": row.funding_max,
+            },
+            "note": row.note,
+        },
+    )
+    db.commit()
+    return {"mandates": [_mandate_payload(row)]}
+
+
+def _card_fingerprint(db: Session, version_id: int, mandate_id: int | None) -> str:
+    """The card's staleness fingerprint: strategy state + mandate version,
+    NEVER the live price — design §6 layer 3 verbatim: a card does not
+    expire because the market moves. Recomputed at confirmation, never
+    trusted from the client: re-basing impossible because the digest is
+    derived, not stored, exactly like the registry approval cards."""
+    import hashlib
+
+    states = (
+        db.execute(
+            select(StrategyState)
+            .where(StrategyState.version_id == version_id)
+            .order_by(StrategyState.id)
+        )
+        .scalars()
+        .all()
+    )
+    latest_state = states[-1].state if states else "none"
+    state_rows = len(states)
+    payload = {
+        "version_id": version_id,
+        "lifecycle_state": latest_state,
+        "state_rows": state_rows,
+        "mandate_id": mandate_id,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+
+
+def _card_payload(row) -> dict:
+    return {
+        "id": row.id,
+        "version_id": row.version_id,
+        "mandate_id": row.mandate_id,
+        "created_at": row.created_at,
+        "symbol": row.symbol,
+        "side": row.side,
+        "notional": row.notional,
+        "chain": json.loads(row.chain_json or "{}"),
+        "fingerprint": row.fingerprint,
+        "state": row.state,
+        "decided_at": row.decided_at,
+        "decision_note": row.decision_note,
+    }
+
+
+@router.get("/order-cards", response_model=TradingOrderCards)
+def list_order_cards(db: Session = Depends(get_trading_db)) -> dict:
+    """Every order card, newest first. Empty is first-class: in M5 cards
+    exist only when exercised — the paper path never creates them, by design
+    layer 3 (per-order approval would make paper worthless as a test)."""
+    if not _tables_present(db):
+        return {"cards": []}
+    try:
+        from trading.models import OrderCard
+
+        rows = db.execute(select(OrderCard).order_by(OrderCard.id.desc())).scalars().all()
+        return {"cards": [_card_payload(r) for r in rows]}
+    except (OperationalError, SQLAlchemyError):
+        return {"cards": []}
+
+
+@router.post("/order-cards", response_model=TradingOrderCards)
+def create_order_card(req: OrderCardCreateRequest, db: Session = Depends(get_trading_db)) -> dict:
+    """An order intent becomes a card (design §6 layer 3). The fingerprint
+    binds the card to the CURRENT strategy state and the active mandate's
+    id — confirm after either moved and the answer is 409. In M5 nothing
+    automatic creates cards; the endpoint exists so the flow is exercisable
+    and testable, and the release terminates at the guard chain because no
+    live adapter exists."""
+    _require_trading_tables(db)
+    from trading.mandate import active_mandate, append_audit
+    from trading.models import OrderCard
+
+    version = db.get(StrategyVersion, req.version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail=f"strategy version {req.version_id} is not registered")
+    mandate = active_mandate(db, req.version_id)
+    fingerprint = _card_fingerprint(db, req.version_id, mandate.id if mandate else None)
+    row = OrderCard(
+        version_id=req.version_id,
+        mandate_id=mandate.id if mandate else None,
+        symbol=req.symbol,
+        side=req.side,
+        notional=req.notional,
+        chain_json=json.dumps(req.chain, sort_keys=True),
+        fingerprint=fingerprint,
+        state="open",
+    )
+    db.add(row)
+    db.flush()
+    append_audit(
+        db,
+        "system",
+        "order_card_created",
+        {
+            "card_id": row.id,
+            "version_id": req.version_id,
+            "mandate_id": row.mandate_id,
+            "symbol": req.symbol,
+            "side": req.side,
+            "notional": req.notional,
+            "fingerprint": fingerprint,
+        },
+    )
+    db.commit()
+    return {"cards": [_card_payload(row)]}
+
+
+@router.post("/order-cards/{card_id}/confirm", response_model=TradingOrderCards)
+def confirm_order_card(card_id: int, req: OrderCardConfirmRequest, db: Session = Depends(get_trading_db)) -> dict:
+    """Confirming the card releases the order — in live. In M5 the release
+    terminates at the guard chain evaluation: the chain runs against the
+    card's mandate with the sentinel in force, its verdict lands in the
+    audit ledger (actor 'guard'), and the card's state records what the
+    chain said. No venue ever sees anything — no live adapter exists.
+
+    The 409 discipline is the registry's exactly: the fingerprint is
+    recomputed from current rows, a mismatch means inputs moved, review the
+    new card, re-basing impossible. A decided card is immutable — a second
+    confirmation is a 409, never a re-decision."""
+    _require_trading_tables(db)
+    from trading.mandate import GuardState, OrderIntent, append_audit, evaluate_order
+    from trading.models import OrderCard, StrategyMandate
+
+    row = db.get(OrderCard, card_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"order card {card_id} does not exist")
+    if row.state != "open":
+        raise HTTPException(
+            status_code=409,
+            detail=f"order card {card_id} is already {row.state} — a card is decided exactly once",
+        )
+    # the fingerprint recomputes against the CURRENTLY active mandate, not the
+    # one the card was created with — a mandate granted, superseded or lapsed
+    # since is exactly the movement the 409 exists to catch.
+    from trading.mandate import active_mandate as _active_mandate
+
+    _mandate_now = _active_mandate(db, row.version_id)
+    current_fp = _card_fingerprint(db, row.version_id, _mandate_now.id if _mandate_now else None)
+    if req.fingerprint != row.fingerprint or current_fp != row.fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "inputs moved — the strategy state or the mandate changed since this card was "
+                "rendered. Review the new state; re-basing is impossible."
+            ),
+        )
+    mandate = db.get(StrategyMandate, row.mandate_id) if row.mandate_id else None
+    # the chain at its real boundary: the sentinel path the desk uses, the
+    # card's intent, an empty exposure book (no live positions exist in M5 —
+    # the chain measures what it's given, and M5 gives it the truth).
+    sentinel = str(Path(get_settings().data_dir) / "HALT")
+    verdict = evaluate_order(
+        mandate,
+        OrderIntent(symbol=row.symbol, side=row.side, notional=row.notional),
+        GuardState(),
+        sentinel_path=sentinel,
+        session=db,
+    )
+    now = dt.datetime.now(dt.UTC)
+    row.decided_at = now
+    row.decision_note = req.note.strip() or verdict.reason[:250]
+    if verdict.allowed:
+        # 'released' means the guard chain allowed it — full stop. No live
+        # adapter exists; the card flow terminates here, by design.
+        row.state = "released"
+    elif verdict.verdict == "reauth":
+        row.state = "confirmed"  # decided, but held for re-consent — not released
+    else:
+        row.state = "denied"
+    db.flush()
+    append_audit(
+        db,
+        "human",
+        "order_card_decided",
+        {
+            "card_id": row.id,
+            "decision": row.state,
+            "guard_verdict": verdict.verdict,
+            "guard_check": verdict.check,
+            "note": req.note.strip(),
+        },
+    )
+    db.commit()
+    return {"cards": [_card_payload(row)]}
+
+
+@router.post("/audit-signoffs")
+def create_audit_signoff(req: AuditSignoffCreateRequest, db: Session = Depends(get_trading_db)) -> dict:
+    """The human's recorded signoff of the written live-readiness audit —
+    the second independent gate on candidate_live → live, alongside the
+    mandate. The document reference is mandatory and validated non-empty:
+    a signoff that names no document certifies nothing. No signoff exists
+    today by design — writing one is the owner's act, AFTER the audit
+    document exists; this endpoint existing is not an invitation, it is the
+    seam the owner's act will use."""
+    _require_trading_tables(db)
+    from trading.mandate import append_audit
+    from trading.models import AuditSignoff
+
+    version = db.get(StrategyVersion, req.version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail=f"strategy version {req.version_id} is not registered")
+    document_ref = req.document_ref.strip()
+    note = req.note.strip()
+    if not document_ref:
+        raise HTTPException(status_code=422, detail="document_ref must name the audit document — a signoff certifying nothing certifies nothing")
+    if not note:
+        raise HTTPException(status_code=422, detail="the human's note is mandatory — the signoff is a human act or it is nothing")
+    row = AuditSignoff(
+        version_id=req.version_id,
+        created_by="operator-ui",
+        document_ref=document_ref,
+        note=note,
+    )
+    db.add(row)
+    db.flush()
+    append_audit(
+        db,
+        "human",
+        "audit_signoff_recorded",
+        {"signoff_id": row.id, "version_id": req.version_id, "document_ref": document_ref, "note": note},
+    )
+    db.commit()
+    return {"signoff_id": row.id, "version_id": req.version_id, "document_ref": document_ref}
+
+
+@router.get("/audit/verify", response_model=AuditChainVerification)
+def verify_audit_chain(db: Session = Depends(get_trading_db)) -> dict:
+    """Walk the audit ledger and validate every hash link. Violations name
+    the rows — a chain that cannot say WHERE it broke is a rumor, not
+    evidence. An intact empty chain is the honest start state."""
+    if not _tables_present(db):
+        return {"rows": 0, "violations": [], "intact": True}
+    try:
+        from trading.mandate import verify_chain
+        from trading.models import AuditLedger
+
+        violations = verify_chain(db)
+        rows = len(db.execute(select(AuditLedger.id)).all())
+        return {"rows": rows, "violations": violations, "intact": not violations}
+    except (OperationalError, SQLAlchemyError):
+        return {"rows": 0, "violations": [], "intact": True}

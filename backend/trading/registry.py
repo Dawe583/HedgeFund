@@ -18,9 +18,10 @@ Transition guards (the only write paths in this module):
   and transition. The approval-card flow that writes those rows is M4; the
   approvals table exists now as the honest stub, so the guard is real code
   against a real table, not a TODO.
-- candidate_live → live: additionally refuses unconditionally in M3 — the
-  mandate that must accompany it is M5, and a transition whose mandatory
-  companion cannot exist is refused outright.
+- candidate_live → live: refuses unless BOTH independent M5 gates hold —
+  an active (unexpired) mandate row for the version AND the human's audit
+  signoff row. Neither exists by default, so live stays structurally
+  unreachable until the written audit is signed off and consent is granted.
 - everything else — backward, equal, skipped states: refused.
 
 The AI rule (design §6): the model may never transition a state. These
@@ -222,15 +223,48 @@ def transition(session, version_id: int, to_state: str, *, validation_id: int | 
             )
         evidence = f"approval:{approval.id}"
     elif edge == ("candidate_live", "live"):
-        # the design's 'approval card PLUS a mandate' — the mandate is M5 and
-        # does not exist, so this transition cannot be satisfied at all in M3
-        raise TransitionRefused(
-            "candidate_live → live requires a mandate (M5), which does not exist — "
-            "live transitions are structurally impossible in M3"
+        # the design's 'approval card PLUS a mandate' — M5 builds both halves
+        # as independent refusals: the mandate (layer 2, the human's immutable
+        # consent) AND the audit signoff (the written live-readiness audit,
+        # signed off by the owner). Neither exists today, so live stays
+        # correctly unreachable; when both exist the transition proceeds and
+        # its evidence names both rows. Each refusal names its missing half —
+        # consent without the audit is not readiness, and an audit without
+        # consent is not permission.
+        from trading.mandate import active_mandate, live_blockers
+        from trading.models import AuditSignoff
+
+        blockers = live_blockers(session, version_id)
+        if blockers:
+            raise TransitionRefused(
+                "candidate_live → live refused: " + "; ".join(blockers)
+            )
+        mandate = active_mandate(session, version_id)
+        signoff = (
+            session.execute(
+                select(AuditSignoff).where(AuditSignoff.version_id == version_id).order_by(AuditSignoff.id.desc())
+            )
+            .scalars()
+            .first()
         )
+        evidence = f"mandate:{mandate.id}+signoff:{signoff.id}"
 
     row = StrategyState(version_id=version_id, state=to_state, evidence=evidence, note=note)
     session.add(row)
+    session.flush()
+    if to_state in ("candidate_live", "live"):
+        # the lifecycle's human-gated edges write to the audit ledger (M5 §D):
+        # actor 'human' because both transitions exist only behind a human's
+        # card — the approval row for paper → candidate_live, the mandate +
+        # signoff for candidate_live → live.
+        from trading.mandate import append_audit
+
+        append_audit(
+            session,
+            "human",
+            f"lifecycle_transition_{to_state}",
+            {"version_id": version_id, "state_row_id": row.id, "evidence": evidence, "note": note},
+        )
     session.flush()
     return row
 

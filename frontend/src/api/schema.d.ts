@@ -1532,6 +1532,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trading/audit-signoffs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Audit Signoff
+         * @description The human's recorded signoff of the written live-readiness audit —
+         *     the second independent gate on candidate_live → live, alongside the
+         *     mandate. The document reference is mandatory and validated non-empty:
+         *     a signoff that names no document certifies nothing. No signoff exists
+         *     today by design — writing one is the owner's act, AFTER the audit
+         *     document exists; this endpoint existing is not an invitation, it is the
+         *     seam the owner's act will use.
+         */
+        post: operations["create_audit_signoff_api_trading_audit_signoffs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trading/audit/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verify Audit Chain
+         * @description Walk the audit ledger and validate every hash link. Violations name
+         *     the rows — a chain that cannot say WHERE it broke is a rumor, not
+         *     evidence. An intact empty chain is the honest start state.
+         */
+        get: operations["verify_audit_chain_api_trading_audit_verify_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trading/backtest-runs": {
         parameters: {
             query?: never;
@@ -1636,6 +1684,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trading/mandates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Mandates
+         * @description Every mandate row ever written, newest first — immutability means
+         *     history is part of the surface: a superseded mandate is still the
+         *     consent older decisions stood on. Empty is the honest M5 end state:
+         *     no mandate exists, the live path is unbuilt by design.
+         */
+        get: operations["list_mandates_api_trading_mandates_get"];
+        put?: never;
+        /**
+         * Create Mandate Endpoint
+         * @description The human confirmation flow — the ONLY write path for mandates.
+         *
+         *     The full cap set must arrive in the body, typed by the human. Every cap
+         *     is a required field because the mandate IS the consent: a machine that
+         *     fills in the numbers for you manufactures permission nobody granted.
+         *     There is no update path anywhere — a new mandate is a new row
+         *     superseding the old by id, so the audit chain can always quote exactly
+         *     which consent an order stood on. The write lands in the audit ledger
+         *     (actor 'human') in the same transaction: a mandate without its audit
+         *     row is a half-written consent, and half-written consent is nothing.
+         */
+        post: operations["create_mandate_endpoint_api_trading_mandates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trading/model-registry": {
         parameters: {
             query?: never;
@@ -1655,6 +1739,66 @@ export interface paths {
         get: operations["model_registry_api_trading_model_registry_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trading/order-cards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Order Cards
+         * @description Every order card, newest first. Empty is first-class: in M5 cards
+         *     exist only when exercised — the paper path never creates them, by design
+         *     layer 3 (per-order approval would make paper worthless as a test).
+         */
+        get: operations["list_order_cards_api_trading_order_cards_get"];
+        put?: never;
+        /**
+         * Create Order Card
+         * @description An order intent becomes a card (design §6 layer 3). The fingerprint
+         *     binds the card to the CURRENT strategy state and the active mandate's
+         *     id — confirm after either moved and the answer is 409. In M5 nothing
+         *     automatic creates cards; the endpoint exists so the flow is exercisable
+         *     and testable, and the release terminates at the guard chain because no
+         *     live adapter exists.
+         */
+        post: operations["create_order_card_api_trading_order_cards_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trading/order-cards/{card_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Order Card
+         * @description Confirming the card releases the order — in live. In M5 the release
+         *     terminates at the guard chain evaluation: the chain runs against the
+         *     card's mandate with the sentinel in force, its verdict lands in the
+         *     audit ledger (actor 'guard'), and the card's state records what the
+         *     chain said. No venue ever sees anything — no live adapter exists.
+         *
+         *     The 409 discipline is the registry's exactly: the fingerprint is
+         *     recomputed from current rows, a mismatch means inputs moved, review the
+         *     new card, re-basing impossible. A decided card is immutable — a second
+         *     confirmation is a 409, never a re-decision.
+         */
+        post: operations["confirm_order_card_api_trading_order_cards__card_id__confirm_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2341,6 +2485,38 @@ export interface components {
             asset_class: string;
             /** Value */
             value: number;
+        };
+        /**
+         * AuditChainVerification
+         * @description POST/GET verification of the audit ledger: violations name the rows,
+         *     empty means the chain is intact.
+         */
+        AuditChainVerification: {
+            /** Intact */
+            intact: boolean;
+            /** Rows */
+            rows: number;
+            /** Violations */
+            violations: string[];
+        };
+        /**
+         * AuditSignoffCreateRequest
+         * @description POST /api/trading/audit-signoffs body. `document_ref` is the audit
+         *     document's path or content hash — the signoff is meaningless unless it
+         *     names WHAT was audited — and `note` is the human's own sentence. No
+         *     signoff exists today by design: writing one is the owner's act, after
+         *     the audit document exists.
+         */
+        AuditSignoffCreateRequest: {
+            /** Document Ref */
+            document_ref: string;
+            /**
+             * Note
+             * @default
+             */
+            note?: string;
+            /** Version Id */
+            version_id: number;
         };
         /**
          * BaseCurrencySetting
@@ -4550,6 +4726,44 @@ export interface components {
             units: number | null;
         };
         /**
+         * MandateCreateRequest
+         * @description POST /api/trading/mandates body. The full cap set is echoed by the
+         *     human in the request — every cap is a REQUIRED field, never defaulted
+         *     server-side (consent_days is the single exception the design itself
+         *     defaults, to 30 days). The reason is the mandate's nature: it is the
+         *     human's written consent, and a consent the machine filled in for you is
+         *     no consent at all. A form that forgets a number is refused at the door
+         *     with 422, not guessed at — the same discipline the kill-switch's re-arm
+         *     note follows. There is deliberately no automation path to this endpoint:
+         *     the AI rule extends to trading as 'the model may never touch a mandate'.
+         */
+        MandateCreateRequest: {
+            /**
+             * Consent Days
+             * @default 30
+             */
+            consent_days?: number;
+            /** Funding Max */
+            funding_max: number;
+            /** Funding Min */
+            funding_min: number;
+            /** Instruments */
+            instruments: string[];
+            /** Max Exposure */
+            max_exposure: number;
+            /** Max Order Notional */
+            max_order_notional: number;
+            /** Max Trades Per Day */
+            max_trades_per_day: number;
+            /**
+             * Note
+             * @default
+             */
+            note?: string;
+            /** Version Id */
+            version_id: number;
+        };
+        /**
          * MatrixCell
          * @description One asset class x region cell of the look-through, as a percent of the
          *     whole portfolio.
@@ -4641,6 +4855,48 @@ export interface components {
              * @description Units the situation stopped claiming while still naming the row. Null when the whole position went unnamed, which is the difference between 'this is gone' and 'there is less of this than you had'.
              */
             units_missing: number | null;
+        };
+        /**
+         * OrderCardConfirmRequest
+         * @description POST /api/trading/order-cards/<id>/confirm body. The fingerprint the
+         *     card rendered with — recomputed server-side from current rows; a
+         *     mismatch is 409, re-basing impossible. `note` is the human's sentence
+         *     on the decision.
+         */
+        OrderCardConfirmRequest: {
+            /** Fingerprint */
+            fingerprint: string;
+            /**
+             * Note
+             * @default
+             */
+            note?: string;
+        };
+        /**
+         * OrderCardCreateRequest
+         * @description POST /api/trading/order-cards body. `chain` is the full decision
+         *     chain the card carries — signal, sizing stages, rails state — exactly
+         *     as design §6 layer 3 demands. The fingerprint is computed server-side
+         *     from strategy state + mandate version and returned on the card; the
+         *     client never supplies it (a client-supplied fingerprint would be a
+         *     self-forged staleness check).
+         */
+        OrderCardCreateRequest: {
+            /**
+             * Chain
+             * @default {}
+             */
+            chain?: {
+                [key: string]: unknown;
+            };
+            /** Notional */
+            notional: number;
+            /** Side */
+            side: string;
+            /** Symbol */
+            symbol: string;
+            /** Version Id */
+            version_id: number;
         };
         /**
          * OverlapItem
@@ -6132,6 +6388,57 @@ export interface components {
             t: string;
         };
         /**
+         * TradingMandate
+         * @description One immutable mandate row as the surface renders it: the cap set,
+         *     the consent window with its expiry, and the integrity digest. `active`
+         *     is the server's own verdict at render time — an expired mandate is
+         *     shown, not hidden, because consent that lapsed is evidence too.
+         */
+        TradingMandate: {
+            /** Active */
+            active: boolean;
+            /** Consent Days */
+            consent_days: number;
+            /** Created At */
+            created_at: string | null;
+            /** Created By */
+            created_by: string;
+            /** Expires At */
+            expires_at: string | null;
+            /** Funding Max */
+            funding_max: number;
+            /** Funding Min */
+            funding_min: number;
+            /** Id */
+            id: number;
+            /** Instruments */
+            instruments: string[];
+            /** Integrity Ok */
+            integrity_ok: boolean;
+            /** Mandate Hash */
+            mandate_hash: string;
+            /** Max Exposure */
+            max_exposure: number;
+            /** Max Order Notional */
+            max_order_notional: number;
+            /** Max Trades Per Day */
+            max_trades_per_day: number;
+            /** Note */
+            note: string;
+            /** Version Id */
+            version_id: number;
+        };
+        /**
+         * TradingMandates
+         * @description GET /api/trading/mandates — every mandate row ever written, newest
+         *     first. Empty is the first-class answer and the honest M5 end state:
+         *     no mandate exists, the live path is unbuilt by design.
+         */
+        TradingMandates: {
+            /** Mandates */
+            mandates: components["schemas"]["TradingMandate"][];
+        };
+        /**
          * TradingModelRegistry
          * @description GET /api/trading/model-registry — every ML model version with its
          *     promotion role and OOS evidence. Empty is the first-class answer: no
@@ -6174,6 +6481,52 @@ export interface components {
             trained_at: string | null;
             /** Version */
             version: number;
+        };
+        /**
+         * TradingOrderCard
+         * @description One order card: the intent, the decision chain, the fingerprint over
+         *     strategy state + mandate version (never the live price — a card does
+         *     not expire because the market moves), and the lifecycle state. In M5
+         *     `verdict` on confirmation is the guard chain's answer, and the release
+         *     terminates there: no live adapter exists, so 'released' means the guard
+         *     chain allowed it, not that any venue saw it.
+         */
+        TradingOrderCard: {
+            /** Chain */
+            chain: {
+                [key: string]: unknown;
+            };
+            /** Created At */
+            created_at: string | null;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decision Note */
+            decision_note: string;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Id */
+            id: number;
+            /** Mandate Id */
+            mandate_id: number | null;
+            /** Notional */
+            notional: number;
+            /** Side */
+            side: string;
+            /** State */
+            state: string;
+            /** Symbol */
+            symbol: string;
+            /** Version Id */
+            version_id: number;
+        };
+        /**
+         * TradingOrderCards
+         * @description GET /api/trading/order-cards — every card, newest first. Empty is
+         *     first-class: in M5 cards exist only when exercised.
+         */
+        TradingOrderCards: {
+            /** Cards */
+            cards: components["schemas"]["TradingOrderCard"][];
         };
         /**
          * TradingPosition
@@ -10143,6 +10496,61 @@ export interface operations {
             };
         };
     };
+    create_audit_signoff_api_trading_audit_signoffs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuditSignoffCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_audit_chain_api_trading_audit_verify_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditChainVerification"];
+                };
+            };
+        };
+    };
     list_backtest_runs_api_trading_backtest_runs_get: {
         parameters: {
             query?: never;
@@ -10247,6 +10655,59 @@ export interface operations {
             };
         };
     };
+    list_mandates_api_trading_mandates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingMandates"];
+                };
+            };
+        };
+    };
+    create_mandate_endpoint_api_trading_mandates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MandateCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingMandates"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     model_registry_api_trading_model_registry_get: {
         parameters: {
             query?: never;
@@ -10263,6 +10724,94 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TradingModelRegistry"];
+                };
+            };
+        };
+    };
+    list_order_cards_api_trading_order_cards_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingOrderCards"];
+                };
+            };
+        };
+    };
+    create_order_card_api_trading_order_cards_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderCardCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingOrderCards"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_order_card_api_trading_order_cards__card_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                card_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderCardConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingOrderCards"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -273,3 +273,27 @@ export async function getModelRegistry(): Promise<TradingModelRegistry> {
     detail means never recorded (or the path matrix honestly too large to
     keep), and the UI says so instead of inventing bands. */
 export type TradingEquityFan = Schemas["TradingEquityFan"];
+
+/* ---- M5 mandate machinery — built, never armed. Same transcription rule:
+   the backend's pydantic models are canonical. The honest-empty answer is
+   the design's expected end state: no mandate exists, no card exercised. */
+
+/** One immutable mandate row: the hard caps a human consented to, the
+    consent window with its expiry, and the integrity digest. `active` is the
+    server's verdict at render time — an expired mandate is shown, never
+    hidden, because lapsed consent is evidence too. */
+export type TradingMandate = Schemas["TradingMandate"];
+
+/** One order card: the intent, the decision chain, the fingerprint over
+    strategy state + mandate version (never the live price), and the
+    lifecycle state. 'released' means the guard chain allowed it — in M5 no
+    venue exists, the flow terminates at the chain. */
+export type TradingOrderCard = Schemas["TradingOrderCard"];
+
+export async function getTradingMandates(): Promise<TradingMandate[]> {
+  return (await api.get<Schemas["TradingMandates"]>("/api/trading/mandates")).data.mandates;
+}
+
+export async function getTradingOrderCards(): Promise<TradingOrderCard[]> {
+  return (await api.get<Schemas["TradingOrderCards"]>("/api/trading/order-cards")).data.cards;
+}

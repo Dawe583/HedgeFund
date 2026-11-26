@@ -30,7 +30,11 @@ import {
   type TradingStrategy,
   type TradingStrategyPanel,
   type TradingValidationQueue,
+  type TradingMandate,
+  type TradingOrderCard,
   type TradingRegistryVersion,
+  getTradingMandates,
+  getTradingOrderCards,
 } from "../api/trading";
 import { Blotter } from "../viz/Blotter";
 import { EquityFanChart } from "../viz/EquityFanChart";
@@ -1884,6 +1888,133 @@ export const ModelRegistryPanelForTest = ModelRegistryPanel;
 
 /* ---- The page ------------------------------------------------------------ */
 
+
+/* ---- The mandate machinery (M5) -------------------------------------------
+
+   Machinery, not chrome: the mandate rows, the order cards. Compact on
+   purpose — the audit document is the M5 deliverable that matters, this
+   surface exists so the machinery is visible and honest. The empty state
+   is the design's expected end state and says so: no mandate exists, the
+   live path is unbuilt by design. */
+
+function fmtCountdown(expiresAt: string | null): string {
+  if (!expiresAt) return "—";
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  if (ms <= 0) return "expired";
+  const days = ms / 86400000;
+  if (days >= 1) return `${Math.floor(days)}d ${Math.floor((days % 1) * 24)}h`;
+  return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
+}
+
+export function MandateSection({
+  mandates,
+  cards,
+  error,
+}: {
+  mandates: TradingMandate[] | null;
+  cards: TradingOrderCard[] | null;
+  error: string | null;
+}) {
+  if (error) return <p className="text-down">{error}</p>;
+  if (mandates === null) return <p className="text-ink-soft">Loading…</p>;
+  const empty = mandates.length === 0;
+  return (
+    <div className="space-y-2">
+      {empty ? (
+        <EmptyState title="No mandate exists — the live path is unbuilt by design">
+          A mandate is the human&apos;s immutable written consent: hard caps on order size, exposure,
+          instruments and daily count, inside a consent window that expires. None has ever been
+          granted. Live trading is unreachable through every independent layer — no mandate, no audit
+          signoff, no live adapter — and this emptiness is the machinery working, not a missing panel.
+        </EmptyState>
+      ) : (
+        <div className={cardClass + " overflow-x-auto"}>
+          <table className="w-full border-collapse font-mono text-xs">
+            <thead>
+              <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
+                <th className="px-3 py-1.5 text-left font-medium">Mandate</th>
+                <th className="px-3 py-1.5 text-left font-medium">Version</th>
+                <th className="px-3 py-1.5 text-right font-medium">Max order</th>
+                <th className="px-3 py-1.5 text-right font-medium">Max exposure</th>
+                <th className="px-3 py-1.5 text-left font-medium">Instruments</th>
+                <th className="px-3 py-1.5 text-right font-medium">Trades/day</th>
+                <th className="px-3 py-1.5 text-left font-medium">Consent</th>
+                <th className="px-3 py-1.5 text-left font-medium">Expires in</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mandates.map((m) => (
+                <tr key={m.id} className="border-b border-hair last:border-b-0">
+                  <td className="px-3 py-1 text-ink" title={`integrity digest ${m.mandate_hash}`}>
+                    #{m.id}
+                    {!m.integrity_ok && (
+                      <span className="text-down" title="the row's caps no longer match their digest — tampered or corrupt">
+                        {" "}⚠ corrupt
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-1 text-ink-soft">v{m.version_id}</td>
+                  <td className="px-3 py-1 text-right tabular-nums text-ink">{m.max_order_notional}</td>
+                  <td className="px-3 py-1 text-right tabular-nums text-ink">{m.max_exposure}</td>
+                  <td className="px-3 py-1 text-ink-soft">{m.instruments.join(", ")}</td>
+                  <td className="px-3 py-1 text-right tabular-nums text-ink">{m.max_trades_per_day}</td>
+                  <td className="px-3 py-1">
+                    <Badge tone={m.active ? "up" : "muted"}>{m.active ? "active" : "expired"}</Badge>
+                  </td>
+                  <td
+                    className="px-3 py-1 text-ink-faint"
+                    title={m.expires_at ? `consent expires ${m.expires_at}` : "no expiry recorded"}
+                  >
+                    {fmtCountdown(m.expires_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {cards !== null && cards.length > 0 && (
+        <div className={cardClass + " overflow-x-auto"}>
+          <table className="w-full border-collapse font-mono text-xs">
+            <thead>
+              <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
+                <th className="px-3 py-1.5 text-left font-medium">Card</th>
+                <th className="px-3 py-1.5 text-left font-medium">Intent</th>
+                <th className="px-3 py-1.5 text-right font-medium">Notional</th>
+                <th className="px-3 py-1.5 text-left font-medium">Mandate</th>
+                <th className="px-3 py-1.5 text-left font-medium">State</th>
+                <th className="px-3 py-1.5 text-left font-medium">Decision</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cards.map((c) => (
+                <tr key={c.id} className="border-b border-hair last:border-b-0">
+                  <td className="px-3 py-1 text-ink" title={`fingerprint ${c.fingerprint}`}>
+                    #{c.id}
+                  </td>
+                  <td className="px-3 py-1 text-ink-soft">
+                    {c.side} {c.symbol}
+                  </td>
+                  <td className="px-3 py-1 text-right tabular-nums text-ink">{c.notional}</td>
+                  <td className="px-3 py-1 text-ink-faint">{c.mandate_id !== null ? `#${c.mandate_id}` : "none"}</td>
+                  <td className="px-3 py-1">
+                    <Badge tone={c.state === "released" ? "up" : c.state === "denied" ? "down" : "muted"}>{c.state}</Badge>
+                  </td>
+                  <td className="px-3 py-1 text-ink-faint" title={c.decision_note}>
+                    {c.decision_note.length > 60 ? c.decision_note.slice(0, 57) + "…" : c.decision_note || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export const MandateSectionForTest = MandateSection;
+
 export default function Trading() {
 
   const [status, setStatus] = useState<TradingStatus | null>(null);
@@ -1906,6 +2037,9 @@ export default function Trading() {
   const [panels, setPanels] = useState<TradingStrategyPanel[] | null>(null);
   const [queue, setQueue] = useState<TradingValidationQueue | null>(null);
   const [models, setModels] = useState<TradingModelRegistry | null>(null);
+  const [mandates, setMandates] = useState<TradingMandate[] | null>(null);
+  const [orderCards, setOrderCards] = useState<TradingOrderCard[] | null>(null);
+  const [mandatesError, setMandatesError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -1965,6 +2099,14 @@ export default function Trading() {
       .then((m) => alive && setModels(m))
       .catch(() => {
         /* same discipline */
+      });
+    getTradingMandates()
+      .then((m) => alive && setMandates(m))
+      .catch((e) => alive && setMandatesError(apiError(e, "The mandates could not be loaded.")));
+    getTradingOrderCards()
+      .then((c) => alive && setOrderCards(c))
+      .catch(() => {
+        /* supplementary — failure renders as no card table, never a blank section */
       });
     return () => {
       alive = false;
@@ -2026,6 +2168,13 @@ export default function Trading() {
           error={registryError}
           onChanged={() => setRegistryReloadKey((k) => k + 1)}
         />
+      </Section>
+
+      <Section
+        title="Mandates & order cards"
+        hint="The M5 mandate machinery — built, never armed. A mandate is the human's immutable consent to hard caps; an order card is a per-order human approval carrying the full decision chain. Both surfaces are honest-empty today: no mandate exists and the live path is unbuilt by design."
+      >
+        <MandateSection mandates={mandates} cards={orderCards} error={mandatesError} />
       </Section>
 
       <Section

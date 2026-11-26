@@ -430,6 +430,99 @@ class Approval(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
     note: Mapped[str] = mapped_column(String(256), default="")
 
+
+class StrategyMandate(Base):
+    """One immutable mandate row — the hard caps a human grants a strategy
+    version for live trading (design §6 layer 2, built in M5). The row IS
+    the consent: max order notional, max exposure, allowed instruments,
+    max trades per day, consent expiry (default 30 days), funding bounds,
+    each decided by the human and typed into the confirmation flow — never
+    reachable by any agent or strategy, and immutable once written. There
+    is deliberately no update path anywhere in the codebase: a changed
+    mandate is a NEW row superseding the old one by id, so the audit chain
+    can always quote exactly which consent an order stood on. `mandate_hash`
+    digests the cap set, recomputed on creation — a row whose stored hash
+    disagrees with its columns is evidence of tampering, and verify_chain
+    surfaces it."""
+
+    __tablename__ = "strategy_mandates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("strategy_versions.id"), index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    max_order_notional: Mapped[float] = mapped_column(Float)
+    max_exposure: Mapped[float] = mapped_column(Float)
+    instruments_json: Mapped[str] = mapped_column(Text)  # JSON list of allowed symbols
+    max_trades_per_day: Mapped[int] = mapped_column(Integer)
+    consent_days: Mapped[int] = mapped_column(Integer)  # consent expiry window, default 30
+    funding_min: Mapped[float] = mapped_column(Float)
+    funding_max: Mapped[float] = mapped_column(Float)
+    note: Mapped[str] = mapped_column(String(256), default="")
+    mandate_hash: Mapped[str] = mapped_column(String(64), default="")
+
+
+class OrderCard(Base):
+    """Layer 3 (design §6): an order intent as a human-approval card, carrying
+    the full decision chain (signal, sizing stages, rails state) in
+    chain_json. The fingerprint digests strategy state + mandate version,
+    NEVER the live price — a card does not expire because the market moves,
+    and confirming after the inputs moved answers 409, re-basing impossible.
+    State machine: open → confirmed/released/denied, latest row wins — a
+    card is decided exactly once."""
+
+    __tablename__ = "order_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("strategy_versions.id"), index=True)
+    mandate_id: Mapped[int | None] = mapped_column(ForeignKey("strategy_mandates.id"), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    symbol: Mapped[str] = mapped_column(String(32))
+    side: Mapped[str] = mapped_column(String(8))  # long | short
+    notional: Mapped[float] = mapped_column(Float)
+    chain_json: Mapped[str] = mapped_column(Text)  # signal + sizing + rails state
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(16), default="open")  # open | confirmed | released | denied
+    decided_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_note: Mapped[str] = mapped_column(String(256), default="")
+
+
+class AuditLedger(Base):
+    """The append-only, hash-chained audit ledger (M5, Vibe's pattern with
+    our schema). Each row's hash covers (prev_hash, timestamp, actor,
+    action, payload-json) — a tampered payload breaks the chain at exactly
+    that row, and verify_chain() names it. The ONLY write path is
+    trading.mandate.append_audit(); no update or delete path exists in the
+    codebase. Actors: human | system | guard."""
+
+    __tablename__ = "audit_ledger"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    actor: Mapped[str] = mapped_column(String(16))
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+    prev_hash: Mapped[str] = mapped_column(String(64))
+    hash: Mapped[str] = mapped_column(String(64), index=True)
+
+
+class AuditSignoff(Base):
+    """The human-recorded signoff that unlocks candidate_live → live, M5
+    layer E: a reference to the audit document (path or hash) plus the
+    human's note. No signoff exists today by design — writing one is the
+    owner's act, after the audit document exists; the transition guard
+    refuses independently of the mandate check until then, so live stays
+    unreachable through M3/M5 even with a mandate in place."""
+
+    __tablename__ = "audit_signoffs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("strategy_versions.id"), index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    document_ref: Mapped[str] = mapped_column(String(256))
+    note: Mapped[str] = mapped_column(String(256), default="")
+
 def make_engine(url: str | None = None):
     """A connection engine. Never DDL.
 

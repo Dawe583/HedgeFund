@@ -518,3 +518,138 @@ class TradingEquityFan(BaseModel):
     band_p75: list[float]
     band_p95: list[float]
     samples: list[list[float]]
+
+
+# --------------------------------------------------------------------------
+# M5 — the mandate machinery, built but never armed (design §6 layers 2-4).
+# The models below describe consent, cards and the audit tape — surfaces
+# whose honest-empty state is the design's expected M5 end state.
+
+
+class MandateCreateRequest(BaseModel):
+    """POST /api/trading/mandates body. The full cap set is echoed by the
+    human in the request — every cap is a REQUIRED field, never defaulted
+    server-side (consent_days is the single exception the design itself
+    defaults, to 30 days). The reason is the mandate's nature: it is the
+    human's written consent, and a consent the machine filled in for you is
+    no consent at all. A form that forgets a number is refused at the door
+    with 422, not guessed at — the same discipline the kill-switch's re-arm
+    note follows. There is deliberately no automation path to this endpoint:
+    the AI rule extends to trading as 'the model may never touch a mandate'."""
+
+    version_id: int
+    max_order_notional: float
+    max_exposure: float
+    instruments: list[str]
+    max_trades_per_day: int
+    consent_days: int = 30
+    funding_min: float
+    funding_max: float
+    note: str = ""
+
+
+class TradingMandate(BaseModel):
+    """One immutable mandate row as the surface renders it: the cap set,
+    the consent window with its expiry, and the integrity digest. `active`
+    is the server's own verdict at render time — an expired mandate is
+    shown, not hidden, because consent that lapsed is evidence too."""
+
+    id: int
+    version_id: int
+    created_at: dt.datetime | None
+    created_by: str
+    max_order_notional: float
+    max_exposure: float
+    instruments: list[str]
+    max_trades_per_day: int
+    consent_days: int
+    funding_min: float
+    funding_max: float
+    note: str
+    mandate_hash: str
+    expires_at: dt.datetime | None
+    active: bool
+    integrity_ok: bool
+
+
+class TradingMandates(BaseModel):
+    """GET /api/trading/mandates — every mandate row ever written, newest
+    first. Empty is the first-class answer and the honest M5 end state:
+    no mandate exists, the live path is unbuilt by design."""
+
+    mandates: list[TradingMandate]
+
+
+class OrderCardCreateRequest(BaseModel):
+    """POST /api/trading/order-cards body. `chain` is the full decision
+    chain the card carries — signal, sizing stages, rails state — exactly
+    as design §6 layer 3 demands. The fingerprint is computed server-side
+    from strategy state + mandate version and returned on the card; the
+    client never supplies it (a client-supplied fingerprint would be a
+    self-forged staleness check)."""
+
+    version_id: int
+    symbol: str
+    side: str
+    notional: float
+    chain: dict[str, Any] = {}
+
+
+class TradingOrderCard(BaseModel):
+    """One order card: the intent, the decision chain, the fingerprint over
+    strategy state + mandate version (never the live price — a card does
+    not expire because the market moves), and the lifecycle state. In M5
+    `verdict` on confirmation is the guard chain's answer, and the release
+    terminates there: no live adapter exists, so 'released' means the guard
+    chain allowed it, not that any venue saw it."""
+
+    id: int
+    version_id: int
+    mandate_id: int | None
+    created_at: dt.datetime | None
+    symbol: str
+    side: str
+    notional: float
+    chain: dict[str, Any]
+    fingerprint: str
+    state: str  # open | confirmed | released | denied
+    decided_at: dt.datetime | None
+    decision_note: str
+
+
+class TradingOrderCards(BaseModel):
+    """GET /api/trading/order-cards — every card, newest first. Empty is
+    first-class: in M5 cards exist only when exercised."""
+
+    cards: list[TradingOrderCard]
+
+
+class OrderCardConfirmRequest(BaseModel):
+    """POST /api/trading/order-cards/<id>/confirm body. The fingerprint the
+    card rendered with — recomputed server-side from current rows; a
+    mismatch is 409, re-basing impossible. `note` is the human's sentence
+    on the decision."""
+
+    fingerprint: str
+    note: str = ""
+
+
+class AuditSignoffCreateRequest(BaseModel):
+    """POST /api/trading/audit-signoffs body. `document_ref` is the audit
+    document's path or content hash — the signoff is meaningless unless it
+    names WHAT was audited — and `note` is the human's own sentence. No
+    signoff exists today by design: writing one is the owner's act, after
+    the audit document exists."""
+
+    version_id: int
+    document_ref: str
+    note: str = ""
+
+
+class AuditChainVerification(BaseModel):
+    """POST/GET verification of the audit ledger: violations name the rows,
+    empty means the chain is intact."""
+
+    rows: int
+    violations: list[str]
+    intact: bool

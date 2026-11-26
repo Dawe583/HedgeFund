@@ -210,8 +210,8 @@ def boot_desk(proxy_url: str):
 def main():
     cycles = int(sys.argv[1]) if len(sys.argv) > 1 else 8
     mode = sys.argv[2] if len(sys.argv) > 2 else "hard"
-    flap_s = 70.0
-    observe_s = 150.0
+    flap_s = float(sys.argv[3]) if len(sys.argv) > 3 else 70.0
+    observe_s = float(sys.argv[4]) if len(sys.argv) > 4 else max(150.0, flap_s + 80.0)
 
     print(json.dumps({"event": "probe_start", "cycles": cycles, "flap_s": flap_s, "mode": mode}), flush=True)
 

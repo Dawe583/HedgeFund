@@ -226,7 +226,13 @@ names that as the line-crossing failure mode.
 ## 6. What is missing before any pilot — the explicit list, ordered
 
 1. **A validated edge exists.** Precondition for everything; currently
-   false for every strategy: 16/16 REJECTED on the kernel sweep with rails
+   false for every strategy (evening update, same day: the research
+   program's first full day measured F1/F2/F3/F4/F5/F7 families — the one
+   in-sample validation cluster, F7 continuation at +1.92 mean Sharpe,
+   died out-of-sample within 13 months at −0.31 uniformly; decay is the
+   measured shape of every edge so far, and F8's regime gate is the
+   program's direct answer. Nothing has changed about this item's truth:
+   no candidate has ever passed the gate out-of-sample with rails on): 16/16 REJECTED on the kernel sweep with rails
    (`docs/research/kernel-sweep-2026-11-26.md`), previously rejected on the
    ported engine and kernel baseline — the rejection has survived three
    independent measurement configurations. Close: a validation row passing

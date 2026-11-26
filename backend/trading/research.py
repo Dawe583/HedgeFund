@@ -183,38 +183,46 @@ def trades_to_records(trades: list[dict], symbol: str) -> list[TradeRecord]:
     return out
 
 
-def validate_strategy(
+def validate_core(
+    strategy,
     bot_key: str,
     symbol: str,
     timeframe: str,
     research_db: str,
-    app_db: str,
     seed: int = DEFAULT_SEED,
     min_trades: int = MIN_TRADES,
     cfg: BTConfig | None = None,
+    df: pd.DataFrame | None = None,
 ) -> dict:
-    """Run backtest + the three statistical checks, write both provenance rows.
+    """Backtest + the three statistical checks, nothing written anywhere.
 
-    Returns the verdict payload; the same content lands in
-    backtest_validations.validation_json, so the database row is the verdict.
+    The composable core the search machinery consumes: pass any constructed
+    strategy instance (catalog default or a parameterized candidate), get the
+    verdict payload back. `validate_strategy` is the persistence wrapper —
+    one function owns statistics, one owns rows, and a swept candidate never
+    inherits the catalog's write path by accident.
+
+    `df` optionally supplies a pre-windowed feature frame: the search slices
+    in-sample / out-of-sample windows once per symbol-timeframe instead of
+    reloading candles per candidate. The caller then owns the window's
+    honesty — the function trusts the frame it is given and reports its
+    actual range.
     """
-    spec = STRATEGIES.get(bot_key)
-    if spec is None:
-        raise SystemExit(f"unknown bot {bot_key!r}; choices: {sorted(STRATEGIES)}")
+    if df is None:
+        data_engine = make_engine(research_db)
+        data_sf = make_session_factory(data_engine)
+        with data_sf() as session:
+            raw = load_candles_df(session, symbol.upper(), timeframe)
+        data_engine.dispose()
+        if raw.empty:
+            raise SystemExit(
+                f"no candles for {symbol} {timeframe} in {research_db} — run ingest first"
+            )
+        df = build_features(raw)
+    elif len(df) == 0:
+        raise SystemExit(f"empty frame passed for {symbol} {timeframe} — a window with no bars validates nothing")
 
-    data_engine = make_engine(research_db)
-    data_sf = make_session_factory(data_engine)
-    with data_sf() as session:
-        raw = load_candles_df(session, symbol.upper(), timeframe)
-    data_engine.dispose()
-    if raw.empty:
-        raise SystemExit(
-            f"no candles for {symbol} {timeframe} in {research_db} — run ingest first"
-        )
-
-    df = build_features(raw)
     bars_per_year = BarsPerYear.get(timeframe, 8_760)
-    strategy = spec["cls"]()
     cfg = cfg or BTConfig()
     result = run_kernel_backtest(df, strategy, cfg, timeframe)
 
@@ -264,14 +272,72 @@ def validate_strategy(
     verdict = "validated" if not reasons else "rejected"
     validation_payload = {"monte_carlo": mc, "bootstrap": bs, "walk_forward": wf}
 
+    return {
+        "verdict": verdict,
+        "result": result,
+        "metrics": result.metrics,
+        "df": df,
+        "mc": mc,
+        "bs": bs,
+        "wf_pos": wf_pos,
+        "wf_total": wf_total,
+        "p_sharpe": p_sharpe,
+        "n_trades": n_trades,
+        "reasons": reasons,
+        "validation_payload": validation_payload,
+    }
+
+
+def validate_strategy(
+    bot_key: str,
+    symbol: str,
+    timeframe: str,
+    research_db: str,
+    app_db: str,
+    seed: int = DEFAULT_SEED,
+    min_trades: int = MIN_TRADES,
+    cfg: BTConfig | None = None,
+    strategy=None,
+) -> dict:
+    """Run backtest + the three statistical checks, write both provenance rows.
+
+    Returns the verdict payload; the same content lands in
+    backtest_validations.validation_json, so the database row is the verdict.
+    `strategy` overrides the catalog default instance — the search passes its
+    candidates through here so every persisted row, swept or not, carries the
+    parameters it actually ran in params_json.
+    """
+    spec = STRATEGIES.get(bot_key)
+    if spec is None:
+        raise SystemExit(f"unknown bot {bot_key!r}; choices: {sorted(STRATEGIES)}")
+
+    strategy = strategy or spec["cls"]()
+    core = validate_core(
+        strategy, bot_key, symbol, timeframe, research_db,
+        seed=seed, min_trades=min_trades, cfg=cfg,
+    )
+    result = core["result"]
+    df = core["df"]
+    mc = core["mc"]
+    bs = core["bs"]
+    wf_pos = core["wf_pos"]
+    wf_total = core["wf_total"]
+    p_sharpe = core["p_sharpe"]
+    n_trades = core["n_trades"]
+    reasons = core["reasons"]
+    verdict = core["verdict"]
+    validation_payload = core["validation_payload"]
+
     metrics = result.metrics
+    # params = the instance's constructor knobs, not a scalp-shaped hardcoded
+    # list: every bot stores its constructor kwargs as same-named scalar
+    # attributes, so the provenance row carries exactly what the instance ran
+    # — swept or default. Mutable runtime state never is a scalar set at
+    # construction; what is not a number or a string does not belong in the row.
     params = {
-        k: getattr(strategy, k)
-        for k in (
-            "regime_min", "rsi_long_max", "rsi_short_min", "pullback_band",
-            "vol_ceiling_pct", "stop_atr", "tp_rr",
-        )
-        if hasattr(strategy, k)
+        k: v
+        for k, v in sorted(vars(strategy).items())
+        if not k.startswith("_") and isinstance(v, (int, float, str, bool))
     }
     data_start = str(df.index[0])
     data_end = str(df.index[-1])

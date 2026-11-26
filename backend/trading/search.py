@@ -1,0 +1,233 @@
+"""The strategy search machinery — governed candidate evaluation.
+
+Companion to docs/research/program-2026-11-26.md, which is binding: the
+count of everything tried is first-class provenance, selection and
+confirmation never share a bar, and a candidate that fails out-of-sample
+is dead permanently. This module is the machinery those rules compile to.
+
+What lives here:
+
+1. The search ledger — one append-only sqlite table in the research db.
+   Every candidate evaluated lands in it: family, parameters, phase,
+   verdict, the four statistics, the data window. Failures are recorded
+   with the same care as passes — the count is the evidence. Nothing is
+   ever updated or deleted; a candidate re-run is a new row.
+
+2. Phase A — in-sample screening. Candidates are evaluated on in-sample
+   data with the full gate. Rails-off BTConfig: the kill-switch truncates
+   losing strategies before 30 trades and the gate cannot tell a bad
+   strategy from a censored sample — screening needs the uncensored
+   evidence. Rails-on is phase B's job, because production truth includes
+   the rails.
+
+3. Phase B — out-of-sample confirmation, one shot, rails ON. Pass → the
+   candidate is eligible for the normal validate+register path (which
+   re-runs the whole thing through the CLI a human can read). Fail → dead.
+
+The in/out split is fixed by the program document at 2025-11-01 and lives
+here as a constant, not a flag: a split that moves with the results is not
+a split.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import sqlite3
+import time
+from dataclasses import dataclass, field
+
+import pandas as pd
+
+log = logging.getLogger(__name__)
+
+# The split fixed by docs/research/program-2026-11-26.md §2 before the first
+# candidate ran. Never a CLI argument.
+OOS_SPLIT = pd.Timestamp("2025-11-01", tz="UTC")
+
+LEDGER_DDL = """
+CREATE TABLE IF NOT EXISTS search_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    family TEXT NOT NULL,
+    candidate TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    params_json TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    trades_n INTEGER,
+    permutation_p REAL,
+    sharpe_ci_lo REAL,
+    wf_positive INTEGER,
+    wf_total INTEGER,
+    sharpe REAL,
+    profit_factor REAL,
+    max_dd_pct REAL,
+    rails TEXT NOT NULL,
+    data_start TEXT,
+    data_end TEXT,
+    data_rows INTEGER,
+    seed INTEGER NOT NULL,
+    reasons_json TEXT NOT NULL,
+    elapsed_s REAL
+)
+"""
+
+
+def open_ledger(db_path: str) -> sqlite3.Connection:
+    """Append-only ledger over plain sqlite3 — it is a research artifact in
+    the replaceable market-data store, deliberately outside the Alembic
+    lineage of the application schema: verdicts are app data, the search's
+    diary is not."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(LEDGER_DDL)
+    conn.commit()
+    return conn
+
+
+def ledger_append(conn: sqlite3.Connection, row: dict) -> int:
+    cols = (
+        "ts, family, candidate, symbol, timeframe, params_json, phase, verdict,"
+        " trades_n, permutation_p, sharpe_ci_lo, wf_positive, wf_total, sharpe,"
+        " profit_factor, max_dd_pct, rails, data_start, data_end, data_rows,"
+        " seed, reasons_json, elapsed_s"
+    )
+    placeholders = ", ".join("?" for _ in cols.split(","))
+    cur = conn.execute(
+        f"INSERT INTO search_ledger ({cols}) VALUES ({placeholders})",
+        [row.get(c.strip()) for c in cols.split(",")],
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def ledger_counts(conn: sqlite3.Connection, family: str | None = None) -> list[tuple]:
+    """(family, phase, verdict, count) — the multiple-testing evidence."""
+    q = "SELECT family, phase, verdict, COUNT(*) FROM search_ledger"
+    args = []
+    if family:
+        q += " WHERE family = ?"
+        args.append(family)
+    q += " GROUP BY family, phase, verdict ORDER BY family, phase, verdict"
+    return conn.execute(q, args).fetchall()
+
+
+def rails_off_config():
+    """BTConfig with layer-0 rails and exposure caps pushed out of reach —
+    screening needs uncensored evidence. A kill-switch that truncates a
+    losing strategy at 12 trades makes the gate confuse 'bad strategy' with
+    'truncated sample'; in phase A we want the strategy's own truth. Fees,
+    slippage and risk sizing stay production-real — cost honesty is not a
+    rail, it is the measurement."""
+    from trading.backtest.engine import BTConfig
+
+    return BTConfig(
+        leverage=1.0,
+        max_symbol_exposure=1e9,
+        max_gross_exposure=1e9,
+        killswitch_dd_pct=99.9,
+        daily_loss_pct=99.9,
+        loss_streak_max=1_000_000,
+    )
+
+@dataclass
+class Candidate:
+    """One point in a family's parameter space — the unit the ledger counts."""
+
+    family: str
+    name: str
+    bot_key: str
+    params: dict
+    make: object  # callable(params) -> strategy instance
+    symbols: list[str] = field(default_factory=lambda: ["BTCUSDT"])
+    timeframe: str = "4h"
+
+    def instance(self):
+        return self.make(self.params)
+
+
+def _window(df: pd.DataFrame, start=None, end=None) -> pd.DataFrame:
+    idx = df.index
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC")
+        df = df.copy()
+        df.index = idx
+    out = df
+    if start is not None:
+        out = out[out.index >= start]
+    if end is not None:
+        out = out[out.index < end]
+    return out
+
+
+def in_sample(df: pd.DataFrame) -> pd.DataFrame:
+    return _window(df, end=OOS_SPLIT)
+
+
+def out_of_sample(df: pd.DataFrame) -> pd.DataFrame:
+    return _window(df, start=OOS_SPLIT)
+
+
+def evaluate_candidate(
+    conn: sqlite3.Connection,
+    candidate: Candidate,
+    *,
+    phase: str,
+    df: pd.DataFrame,
+    research_db: str,
+    seed: int,
+    cfg,
+    symbol: str,
+) -> dict:
+    """One candidate, one phase, one symbol — validated through the same
+    validate_core the CLI uses, then ledgered. The ledger write is not
+    optional: an evaluation that does not land in the ledger is exactly the
+    selection bias this machinery exists to prevent, so the write happens
+    inside the same call, before the verdict is returned."""
+    from trading.research import validate_core
+
+    if phase not in ("A", "B"):
+        raise ValueError(f"phase must be A or B, got {phase!r}")
+
+    started = time.monotonic()
+    instance = candidate.instance()
+    core = validate_core(
+        instance,
+        candidate.bot_key,
+        symbol,
+        candidate.timeframe,
+        research_db,
+        seed=seed,
+        cfg=cfg,
+        df=df,
+    )
+    elapsed = round(time.monotonic() - started, 2)
+    metrics = core["metrics"]
+    row = {
+        "ts": pd.Timestamp.now(tz="UTC").isoformat(),
+        "family": candidate.family,
+        "candidate": candidate.name,
+        "symbol": symbol.upper(),
+        "timeframe": candidate.timeframe,
+        "params_json": json.dumps(candidate.params, sort_keys=True),
+        "phase": phase,
+        "verdict": core["verdict"],
+        "trades_n": core["n_trades"],
+        "permutation_p": core["p_sharpe"],
+        "sharpe_ci_lo": core["bs"].get("ci_lower"),
+        "wf_positive": core["wf_pos"],
+        "wf_total": core["wf_total"],
+        "sharpe": metrics.get("sharpe"),
+        "profit_factor": metrics.get("profit_factor"),
+        "max_dd_pct": metrics.get("max_dd_pct"),
+        "rails": "off" if phase == "A" else "on",
+        "data_start": str(df.index[0]),
+        "data_end": str(df.index[-1]),
+        "data_rows": len(df),
+        "seed": seed,
+        "reasons_json": json.dumps(core["reasons"]),
+        "elapsed_s": elapsed,
+    }
+    row_id = ledger_append(conn, row)
+    return {"id": row_id, **row, "core": core}

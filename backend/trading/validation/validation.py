@@ -361,6 +361,30 @@ def walk_forward_analysis(
     sharpes_list = [w["sharpe"] for w in windows]
     profitable_windows = sum(1 for r in returns_list if r > 0)
 
+    # Edge-decay shape (regime-architecture-2026-11-26): presence is not
+    # enough — a candidate whose edge concentrates in early windows reads
+    # as regime-conditional even when every aggregate passes. Two honest
+    # numbers: the least-squares slope of the per-window Sharpe series
+    # (negative = decaying), and the best-window share of total return
+    # (1.0 = the whole edge is one regime). Neither gates anything yet;
+    # they exist so a validation row can be READ for what it is, and so
+    # the gate upgrade the architecture doc promises has measurements to
+    # work with when it lands.
+    decay: Dict[str, Any] = {}
+    if len(sharpes_list) > 1:
+        x = np.arange(len(sharpes_list), dtype=float)
+        x = x - x.mean()
+        denom = float((x ** 2).sum())
+        slope = float((x * (np.array(sharpes_list) - np.mean(sharpes_list))).sum() / denom) if denom else 0.0
+        pos = [r for r in returns_list if r > 0]
+        total_pos = float(sum(pos))
+        best_share = round(float(max(pos) / total_pos), 4) if total_pos > 0 else None
+        decay = {
+            "sharpe_slope_per_window": round(slope, 4),
+            "best_window_return_share": best_share,
+            "window_sharpes": sharpes_list,
+        }
+
     return {
         "analysis_type": "window_consistency",
         "includes_boundary_returns": True,
@@ -372,6 +396,7 @@ def walk_forward_analysis(
         "return_std": round(float(np.std(returns_list)), 6),
         "sharpe_mean": round(float(np.mean(sharpes_list)), 4),
         "sharpe_std": round(float(np.std(sharpes_list)), 4),
+        "edge_decay": decay,
     }
 
 

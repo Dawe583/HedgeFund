@@ -49,32 +49,69 @@ def evaluate_cell(payload: dict) -> dict:
     conn = open_ledger(payload["ledger_path"])
     try:
         cfg = rails_off_config() if payload["phase"] == "A" else BTConfig()
-        if payload.get("basket"):
-            from trading.basket import evaluate_basket
+        try:
+            if payload.get("basket"):
+                from trading.basket import evaluate_basket
 
-            row = evaluate_basket(
+                row = evaluate_basket(
+                    conn,
+                    candidate,
+                    symbols=payload["basket"],
+                    phase=payload["phase"],
+                    research_db=payload["research_db"],
+                    seed=payload["seed"],
+                    cfg=cfg,
+                )
+                return {k: row.get(k) for k in ("id", "candidate", "symbol", "verdict", "trades_n", "permutation_p", "sharpe", "elapsed_s")}
+            df = load_frame(payload["research_db"], payload["symbol"], payload["timeframe"])
+            window = in_sample(df) if payload["phase"] == "A" else out_of_sample(df)
+            row = evaluate_candidate(
                 conn,
                 candidate,
-                symbols=payload["basket"],
                 phase=payload["phase"],
+                df=window,
                 research_db=payload["research_db"],
                 seed=payload["seed"],
                 cfg=cfg,
+                symbol=payload["symbol"],
             )
-            return {k: row.get(k) for k in ("id", "candidate", "symbol", "verdict", "trades_n", "permutation_p", "sharpe", "elapsed_s")}
-        df = load_frame(payload["research_db"], payload["symbol"], payload["timeframe"])
-        window = in_sample(df) if payload["phase"] == "A" else out_of_sample(df)
-        row = evaluate_candidate(
-            conn,
-            candidate,
-            phase=payload["phase"],
-            df=window,
-            research_db=payload["research_db"],
-            seed=payload["seed"],
-            cfg=cfg,
-            symbol=payload["symbol"],
-        )
-        return {k: row[k] for k in ("id", "candidate", "symbol", "verdict", "trades_n", "permutation_p", "sharpe", "elapsed_s")}
+            return {k: row[k] for k in ("id", "candidate", "symbol", "verdict", "trades_n", "permutation_p", "sharpe", "elapsed_s")}
+        except BaseException as exc:
+            # SystemExit included — load_frame uses it for missing data, and
+            # a missing-data evaluation is an evaluation that failed: the
+            # count of everything tried is the ledger's whole point, and an
+            # error that lands nowhere is exactly the invisible selection
+            # the program forbids. KeyboardInterrupt passes through below.
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            # a crashed evaluation is still an evaluation — the count of
+            # everything tried is the ledger's whole point, and an error
+            # that lands nowhere is exactly the invisible selection the
+            # program forbids. The row carries no statistics because none
+            # honestly exist.
+            import json as _json
+            import time as _time
+
+            import pandas as _pd
+
+            from trading.search import ledger_append
+
+            err_row = {
+                "ts": _pd.Timestamp.now(tz="UTC").isoformat(),
+                "family": candidate.family,
+                "candidate": candidate.name,
+                "symbol": "+".join(sorted(payload["basket"])) if payload.get("basket") else payload["symbol"],
+                "timeframe": candidate.timeframe,
+                "params_json": _json.dumps(candidate.params, sort_keys=True),
+                "phase": payload["phase"],
+                "verdict": "error",
+                "seed": payload["seed"],
+                "rails": "off" if payload["phase"] == "A" else "on",
+                "reasons_json": _json.dumps([f"error: {type(exc).__name__}: {exc}"][:1]),
+            }
+            row_id = ledger_append(conn, err_row)
+            return {"id": row_id, "candidate": candidate.name, "symbol": err_row["symbol"],
+                    "verdict": "error", "error": str(exc)}
     finally:
         conn.close()
 

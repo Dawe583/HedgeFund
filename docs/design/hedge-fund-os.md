@@ -215,6 +215,9 @@ multiplier from the ML gate and the local quality score, replacing both
 `quant_mult` and `quality_size_mult`), and hard caps (exposure, gross
 exposure, position count). Leverage, if ever used, is a mandate property
 approved per strategy, not a dynamic function of conviction.
+Hard caps veto, they do not resize: an entry the caps or rails refuse is
+rejected with a recorded reason, never resized down — measured in the
+rails-active kernel sweep (`docs/research/kernel-sweep-2026-11-26.md`).
 
 ---
 
@@ -726,6 +729,12 @@ a scaffold.
   the experiment.
 
 ### M2 — Backtest + validation end-to-end on one strategy (5-8 days, depends on M1)
+- **Status: landed (measured).** Validation gate live on the kernel
+  harness; 16/16 strategy cells REJECTED in the rails-active sweep, and
+  nothing validates on any engine, with or without rails — the empty
+  roster is the gate working, not a pipeline failure. Status of record:
+  `docs/research/kernel-diff-2026-11-25.md`,
+  `docs/research/kernel-sweep-2026-11-26.md`.
 - Vendor Vibe's validation trio into `backend/trading/validation/`; port
   ScalpTrend as the reference pure strategy.
 - **Kernel confirmed:** backtests run on nautilus 1.231.0 behind the
@@ -752,6 +761,14 @@ a scaffold.
   is how curve-fitting is born).
 
 ### M3 — Paper engine 24/7 (6-9 days, depends on M2)
+- **Status: slices 1–5 landed, soak in progress (measured 2026-11-26).**
+  The 24h slice-2 acceptance soak launched 2026-11-26 00:31 UTC; verdict
+  pending ~2026-11-27 00:37 UTC. "At least one validated strategy" below
+  is vacuous by measurement: none exists — the registry guard refuses
+  promotion and the roster is honestly empty. Status of record:
+  `docs/design/m3-paper-plan.md` (slice notes),
+  `docs/research/live-smoke-2026-11-26.md`,
+  `docs/research/soak-2026-11-26.md`.
 - Engine process: nautilus kernel + the harness wrapper + ported risk
   rails + redesigned three-stage sizing + ML champion/challenger pipeline +
   agent budget/memory integration. Multi-symbol by construction, even if
@@ -768,6 +785,10 @@ a scaffold.
 - **Out of scope:** any live path, leverage, additional venues.
 
 ### M4 — Unified dashboard (5-7 days, can overlap M3 after week one)
+- **Partial status (measured 2026-11-26):** the control write paths
+  landed — kill-switch endpoint plus registry approval with
+  recomputed-fingerprint 409 discipline — per the M4 implementation
+  notes in `docs/design/m3-paper-plan.md`.
 - Trading ops, research, intelligence sections in the Aurelio React app per
   §8; consolidated fund overview with the reconciliation line.
 - lightweight-charts integrated (no Vite config needed); Perspective
@@ -879,15 +900,27 @@ generation.
 - Do not arm live trading outside the M5 audit process, whatever the paper
   results look like. A good paper run is a candidate, not a license.
 
-**Unverified as of writing:**
-- nautilus multi-symbol and intraday (1m) operation — the spike validated
-  daily bars only; M1/M3 acceptance extends evidence there before the
-  engine depends on it.
-- OpenBB's actual coverage advantage for what this system reads — time-boxed
-  experiment in M1, no commitment either way.
+**Unverified as of writing — all three since resolved:**
+- ~~nautilus multi-symbol and intraday (1m) operation — the spike validated
+  daily bars only~~ — resolved in M3: 1m intraday measured end-to-end on
+  the live Binance tape (exact bar-close cadence, fills at exactly the
+  bar close, WS reconnect recovery ~40 s —
+  `docs/research/live-smoke-2026-11-26.md`); multi-symbol isolation
+  construction-tested (`test_two_symbols_never_share_state`); the 24h
+  soak is the evidence extension, in progress
+  (`docs/research/soak-2026-11-26.md`).
+- ~~OpenBB's actual coverage advantage for what this system reads —
+  time-boxed experiment in M1, no commitment either way.~~ — resolved
+  2026-11-26, verdict REJECT adoption: yfinance covers the actual read
+  universe 15/15 plus exotic FX; OpenBB's keyless providers are broken
+  or absent for that universe, `etf.holdings` is strictly worse than the
+  existing waterfall, dividend currency is dropped; macro is real value
+  but nothing reads it. Evidence and re-evaluation trigger:
+  `docs/research/openbb-evaluation-2026-11-26.md`.
 - ~~The harness's execution wrapper is designed but unbuilt~~ — resolved in
   M2: built and acceptance-tested; the next-open variant was measured
-  impossible on bar-only data and the close-of-bar delayed model replaced it.
+  impossible on bar-only data and the close-of-bar delayed model replaced
+  it (`docs/research/kernel-diff-2026-11-25.md`).
 
 ---
 

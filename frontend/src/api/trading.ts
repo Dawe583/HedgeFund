@@ -123,6 +123,20 @@ export async function getTradingPositions(): Promise<TradingPosition[]> {
   return (await api.get<TradingPosition[]>("/api/trading/positions")).data;
 }
 
+/** The desk's rail state: per-bot kill-switch/drawdown, daily loss consumed,
+    loss-streak cooldown and exposure against the caps, plus the desk-wide
+    external halts (manual kill-switch, halt sentinel) and the recent
+    risk_events the rails wrote to explain themselves. `bots` empty is the
+    honest answer both for an engine that never ran and for the ready-and-
+    empty end state of a registry with zero validated strategies. */
+export type TradingRailsStatus = Schemas["TradingRailsStatus"];
+export type TradingBotRails = Schemas["TradingBotRails"];
+export type TradingRiskEvent = Schemas["TradingRiskEvent"];
+
+export async function getTradingRails(): Promise<TradingRailsStatus> {
+  return (await api.get<TradingRailsStatus>("/api/trading/rails")).data;
+}
+
 export async function getRecentTrades(): Promise<TradingClosedTrade[]> {
   return (await api.get<TradingClosedTrade[]>("/api/trading/positions/recent-trades")).data;
 }

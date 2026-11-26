@@ -184,7 +184,8 @@ class HarnessRunState:
     net pnl of each close, so sizing inside the kernel run uses exactly the
     equity the ported engine would have used at that moment."""
 
-    def __init__(self, initial_equity: float, on_position_event=None, exposure_book=None):
+    def __init__(self, initial_equity: float, on_position_event=None, exposure_book=None,
+                 manual_halt_check=None, halt_sentinel_path: str | None = None):
         self.fills: list[dict] = []
         self.order_meta: dict[str, dict] = {}
         self.positions: list[dict] = []
@@ -216,6 +217,22 @@ class HarnessRunState:
         # still fill intrabar while its cancel is in flight.
         self.adjudicated_order_ids: set[str] = set()
         self.pending_cancel_ids: set[str] = set()
+        # Layer-0 external halts (design §6, trading/rails.py): the persisted
+        # manual kill-switch row and the Layer-4 halt sentinel file. Both are
+        # checked at entry-evaluation cadence (the sentinel also at rearm
+        # submission); None means the check does not exist — backtests pass
+        # nothing, the desk wires the database row and the sentinel path.
+        self.manual_halt_check = manual_halt_check
+        self.halt_sentinel_path = halt_sentinel_path
+        # rail firing tape: non-veto firings (trip, breach, cooldown start,
+        # halt observations) land here; entry-blocking firings land in
+        # `vetoes` alongside the sizing vetoes so one tape explains every
+        # refused entry. The desk's hook persists both into risk_events.
+        self.rail_events: list[dict] = []
+        self.on_rail_event = None
+        # the run's RailBook, built by the strategy class at init — attached
+        # here so the desk can snapshot rail state per bot
+        self.rails = None
     def order_chain_drained(self) -> bool:
         """Every submitted order has reached a terminal-ish state — fill,
         acceptance, rejection or cancel — and no cancel command is still
@@ -289,6 +306,24 @@ def _make_strategy_class():
             self._cfg: BTConfig = config.bt_config
             self._open_pos: dict | None = None
             self._last_close = 0.0
+            # epoch seconds of the last bar CLOSE (test bars stamp ts_event at
+            # the open, binance bars at the close — max() is the close in both,
+            # see _on_bar); the rails measure cooldowns and UTC days on it, so
+            # backtests and paper run the identical clock: the tape's, never
+            # the wall's
+            self._last_bar_close_s = 0.0
+            self._rearm_halt_notified = False
+            from trading.rails import RailBook
+
+            self._rails = RailBook(
+                config.bt_config.initial_equity,
+                killswitch_dd_pct=config.bt_config.killswitch_dd_pct,
+                daily_loss_pct=config.bt_config.daily_loss_pct,
+                loss_streak_max=config.bt_config.loss_streak_max,
+                cooldown_hours=config.bt_config.cooldown_hours,
+                flatten_on_kill=config.bt_config.flatten_on_kill,
+            )
+            self._state.rails = self._rails
 
         def on_start(self):
             from nautilus_trader.model.data import BarType
@@ -314,19 +349,35 @@ def _make_strategy_class():
             # (a bar closed), so the order is no longer rejected on sight
             pending_rearm = getattr(self, "_pending_rearm", None)
             if pending_rearm is not None:
-                from nautilus_trader.model.enums import TimeInForce
+                # the halt sentinel outranks even restart repair: re-arming is
+                # a market entry, and entries do not happen while the file
+                # exists. The position stays pending and retries every bar —
+                # protective repair is deferred, never cancelled.
+                if self._halt_sentinel_present():
+                    if not self._rearm_halt_notified:
+                        self._rearm_halt_notified = True
+                        self._emit_rail_event(
+                            "halt_sentinel",
+                            "rearm_deferred",
+                            {"path": self._state.halt_sentinel_path, "ledger_row_id": pending_rearm["pos"].get("ledger_row_id")},
+                            max(int(bar.ts_event), int(bar.ts_init)) / 1e9,
+                        )
+                        self.log.error("halt sentinel present — re-arm deferred until it clears")
+                else:
+                    from nautilus_trader.model.enums import TimeInForce
 
-                instrument = self.cache.instrument(self.instrument_id)
-                order = self.order_factory.market(
-                    self.instrument_id,
-                    pending_rearm["order_side"],
-                    instrument.make_qty(pending_rearm["qty"]),
-                    time_in_force=TimeInForce.GTC,
-                )
-                self._state.order_meta[str(order.client_order_id)] = pending_rearm["meta"]
-                pending_rearm["pos"]["entry_order_id"] = str(order.client_order_id)
-                self._pending_rearm = None
-                self.submit_order(order)
+                    instrument = self.cache.instrument(self.instrument_id)
+                    order = self.order_factory.market(
+                        self.instrument_id,
+                        pending_rearm["order_side"],
+                        instrument.make_qty(pending_rearm["qty"]),
+                        time_in_force=TimeInForce.GTC,
+                    )
+                    self._state.order_meta[str(order.client_order_id)] = pending_rearm["meta"]
+                    pending_rearm["pos"]["entry_order_id"] = str(order.client_order_id)
+                    self._pending_rearm = None
+                    self._rearm_halt_notified = False
+                    self.submit_order(order)
             # the bar that closed is pushed into the frame source BEFORE any
             # evaluation — ordering is structural, never subscription luck
             self._frame_source.on_bar_close(bar)
@@ -337,6 +388,11 @@ def _make_strategy_class():
             # derive from the frame; in paper it is the live close. One
             # definition, both contexts.
             self._last_close = float(bar.close)
+            # bar-close epoch seconds: test/replay bars stamp ts_event at the
+            # open and ts_init at the close, binance kline bars stamp both at
+            # the close — max() is the close in every context, one clock for
+            # the rails in backtest and paper alike
+            self._last_bar_close_s = max(int(bar.ts_event), int(bar.ts_init)) / 1e9
             df = self._frame_source.frame()
             cfg = self._cfg
             # the universal bar index: the just-closed bar's POSITION in the
@@ -437,6 +493,70 @@ def _make_strategy_class():
             }
             self._open_pos = pos
 
+        # -- rails (design §6 layer 0) --------------------------------------
+
+        def _halt_sentinel_present(self) -> bool:
+            """Layer 4: the sentinel file's EXISTENCE is the halt — content is
+            never read, so a corrupt file halts exactly like a sound one."""
+            import os
+
+            path = self._state.halt_sentinel_path
+            return bool(path) and os.path.exists(path)
+
+        def _emit_rail_event(self, rail: str, decision: str, inputs: dict, ts: float) -> None:
+            event = {"rail": rail, "decision": decision, "inputs": inputs, "ts": ts}
+            self._state.rail_events.append(event)
+            if self._state.on_rail_event is not None:
+                try:
+                    self._state.on_rail_event(event)
+                except Exception:
+                    self.log.exception("rail event hook failed — event kept in run state")
+
+        def _veto_entry(self, veto: dict) -> None:
+            """One tape for every refused entry: sizing vetoes (slice 3) and
+            rail vetoes share the veto stream, so 'why didn't it trade' has
+            exactly one answer surface. The desk's on_veto hook persists a
+            risk_events row with the inputs — the explanation IS the row."""
+            veto.setdefault("tape_ts", self._last_bar_close_s)
+            self._state.vetoes.append(veto)
+            self.log.warning(f"entry vetoed: {veto.get('reason')} {veto}")
+            if self._state.on_veto is not None:
+                self._state.on_veto(veto)
+
+        def _rail_entry_verdict(self, side_str: str, sig_bar: int) -> dict | None:
+            """Layer-0 external halts + the RailBook verdict, evaluated BEFORE
+            any sizing arithmetic (design §6: rails precede the order's
+            existence). Returns the veto payload, or None when entries flow.
+            Ordering: sentinel, manual kill-switch, then the in-run rails —
+            the most external and most terminal rails explain themselves
+            first."""
+            iid = str(self.instrument_id)
+            base = {"instrument": iid, "side": side_str, "signal_bar": sig_bar,
+                    "equity": self._state.realized_net}
+            if self._halt_sentinel_present():
+                return {**base, "rail": "halt_sentinel", "reason": "halt_sentinel",
+                        "inputs": {"path": self._state.halt_sentinel_path}}
+            check = self._state.manual_halt_check
+            if check is not None:
+                # fail-CLOSED: a manual kill-switch whose state cannot be read
+                # is a kill-switch that says no — the alternative is trading
+                # blind against a switch the operator may have thrown
+                try:
+                    tripped = bool(check())
+                    error = None
+                except Exception as exc:  # noqa: BLE001 — the failure IS the verdict
+                    tripped, error = True, repr(exc)
+                if tripped:
+                    inputs = {"source": "persisted __killswitch row"}
+                    if error is not None:
+                        inputs["check_error"] = error
+                    return {**base, "rail": "manual_killswitch", "reason": "manual_killswitch",
+                            "inputs": inputs}
+            verdict = self._rails.entry_verdict(self._last_bar_close_s, self._state.realized_net)
+            if verdict is not None:
+                return {**base, **verdict}
+            return None
+
         # -- execution ------------------------------------------------------
 
         def _enter(
@@ -449,6 +569,14 @@ def _make_strategy_class():
             atr_abs: float,
         ):
             from nautilus_trader.model.enums import ContingencyType, OrderSide, TimeInForce
+
+            # Layer 0 before sizing (design §6): the rails speak first — an
+            # entry a rail refuses never becomes a quantity at all, and the
+            # veto carries the rail's inputs as its explanation.
+            rail_veto = self._rail_entry_verdict(side_str, sig_bar)
+            if rail_veto is not None:
+                self._veto_entry(rail_veto)
+                return
 
             close_k = self._last_close
             stop_dist = stop_atr * atr_abs
@@ -492,10 +620,7 @@ def _make_strategy_class():
                     "gross_cap": self._cfg.max_gross_exposure,
                     "signal_bar": sig_bar,
                 }
-                self._state.vetoes.append(veto)
-                self.log.warning(f"entry vetoed: {cap_breach} {veto}")
-                if self._state.on_veto is not None:
-                    self._state.on_veto(veto)
+                self._veto_entry(veto)
                 return
 
             if side_str == "long":
@@ -785,6 +910,13 @@ def _make_strategy_class():
             pos["fees"] = fees
             pos["entry_price_net"] = entry_px
             pos["exit_price_net"] = exit_px
+            # the rails learn every close at the close's own kernel timestamp —
+            # the streak increments, the daily loss accrues, the drawdown is
+            # measured, all on the same clock in backtest and paper
+            settle_ts = pos["exit_fill"]["ts_event"] / 1e9
+            for event in self._rails.settle(pnl, settle_ts, self._state.realized_net):
+                self._emit_rail_event(event["rail"], event["decision"], event["inputs"], event["ts"])
+                self.log.warning(f"rail {event['decision']}: {event['rail']} {event['inputs']}")
 
         def on_order_accepted(self, event):
             # quiescence evidence for replay pacing: an accepted order is
@@ -837,6 +969,8 @@ def run_kernel_backtest(
     timeframe: str = "1h",
     symbol: str = "BTCUSDT",
     exposure_book=None,
+    manual_halt_check=None,
+    halt_sentinel_path: str | None = None,
 ) -> BTResult:
     """Backtest on the nautilus kernel with the ported engine's economics
     reconstructed from its fills. Same contract as `run_backtest` — df is the
@@ -858,7 +992,12 @@ def run_kernel_backtest(
     from nautilus_trader.model.objects import Money
 
     instrument = make_sim_instrument(symbol)
-    state = HarnessRunState(cfg.initial_equity, exposure_book=exposure_book)
+    state = HarnessRunState(
+        cfg.initial_equity,
+        exposure_book=exposure_book,
+        manual_halt_check=manual_halt_check,
+        halt_sentinel_path=halt_sentinel_path,
+    )
 
     config = BacktestEngineConfig(
         trader_id=TraderId("KERNEL-BT-001"),
@@ -901,6 +1040,10 @@ def run_kernel_backtest(
     # the veto tape rides inside metrics — sizing provenance (design D10)
     # belongs to every validation row, and a BTResult is the audit object
     metrics["vetoes"] = [dict(v) for v in state.vetoes]
+    # non-veto rail firings (trip, breach, cooldown start) — the veto tape
+    # explains refused entries, this tape explains how the rails got there
+    metrics["rail_events"] = [dict(e) for e in state.rail_events]
+    metrics["rail_state"] = state.rails.snapshot(strat._last_bar_close_s, state.realized_net) if state.rails is not None else None
     engine.dispose()
     return BTResult(trades, equity, metrics)
 

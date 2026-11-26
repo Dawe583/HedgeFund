@@ -1570,6 +1570,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trading/rails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trading Rails
+         * @description Per-bot rail state: the kill-switches, the daily loss consumed, the
+         *     loss-streak cooldown, exposure against the caps, and the recent
+         *     risk_events the rails wrote to explain themselves.
+         *
+         *     Sources, honestly separated: the manual kill-switch and the halt
+         *     sentinel are read LIVE (they are external halts — a cached answer would
+         *     be a lie by design), the per-bot rails come from the desk runner's
+         *     snapshots (kernel memory is the truth; the snapshot is its rendering),
+         *     and the events come from the risk_events table. Empty is the first-class
+         *     answer: an engine that never ran has rails and no rail state.
+         */
+        get: operations["trading_rails_api_trading_rails_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trading/status": {
         parameters: {
             query?: never;
@@ -1599,10 +1628,10 @@ export interface paths {
         };
         /**
          * Trading Strategies
-         * @description The four ported strategies, straight from the static registry.
-         *
-         *     Pure code facts — no database involved, because a registry row that
-         *     claims lifecycle state before lifecycle tables exist would be lying.
+         * @description The catalog of ported strategies, with the lifecycle registry's
+         *     answer beside each: registered means a strategies row exists — the
+         *     explicit act — never that capital followed it (that is the roster,
+         *     versions in state paper, which /rails and /status reflect).
          */
         get: operations["trading_strategies_api_trading_strategies_get"];
         put?: never;
@@ -5437,6 +5466,46 @@ export interface components {
             known_countries: components["schemas"]["TaxCountryDefault"][];
         };
         /**
+         * TradingBotRails
+         * @description One bot's rail state as the desk's snapshot last wrote it — every
+         *     number the rails themselves computed, plus the exposure book's slice.
+         *     `asof` is the snapshot's write time: the UI says when this was true,
+         *     because a rail state without a clock is a rumor.
+         */
+        TradingBotRails: {
+            /** Asof */
+            asof: string | null;
+            /** Bot */
+            bot: string;
+            /** Cooldown Remaining S */
+            cooldown_remaining_s: number;
+            /** Daily Breached */
+            daily_breached: boolean;
+            /** Daily Loss */
+            daily_loss: number;
+            /** Daily Loss Consumed */
+            daily_loss_consumed: number;
+            /** Daily Loss Limit */
+            daily_loss_limit: number;
+            /** Drawdown Pct */
+            drawdown_pct: number;
+            /** Equity */
+            equity: number;
+            exposure: components["schemas"]["TradingRailExposure"] | null;
+            /** Kill Tripped */
+            kill_tripped: boolean;
+            /** Killswitch Dd Pct */
+            killswitch_dd_pct: number;
+            /** Loss Streak */
+            loss_streak: number;
+            /** Max Losses */
+            max_losses: number;
+            /** Peak Equity */
+            peak_equity: number;
+            /** Vetoes Total */
+            vetoes_total: number;
+        };
+        /**
          * TradingClosedTrade
          * @description One settled round-trip the desk wrote — the recent evidence strip.
          */
@@ -5537,6 +5606,57 @@ export interface components {
             data_start: string;
             /** Seed */
             seed: number;
+        };
+        /** TradingRailExposure */
+        TradingRailExposure: {
+            /** Gross Cap */
+            gross_cap: number;
+            /** Gross Notional */
+            gross_notional: number;
+            /** Instrument Notional */
+            instrument_notional: number;
+            /** Symbol Cap */
+            symbol_cap: number;
+        };
+        /**
+         * TradingRailsStatus
+         * @description The desk's rail state at a glance. `bots` empty is the honest answer
+         *     for an engine that never ran — and for the M3 end state of a registry
+         *     with zero validated strategies: rails exist, nothing trades beneath
+         *     them, and the strip says so.
+         */
+        TradingRailsStatus: {
+            /** Bots */
+            bots: components["schemas"]["TradingBotRails"][];
+            /** Halt Sentinel */
+            halt_sentinel: boolean;
+            /** Halt Sentinel Path */
+            halt_sentinel_path: string;
+            /** Manual Killswitch */
+            manual_killswitch: boolean;
+            /** Manual Killswitch Note */
+            manual_killswitch_note: string;
+            /** Recent Events */
+            recent_events: components["schemas"]["TradingRiskEvent"][];
+        };
+        /** TradingRiskEvent */
+        TradingRiskEvent: {
+            /** Bot */
+            bot: string;
+            /** Created At */
+            created_at: string | null;
+            /** Decision */
+            decision: string;
+            /** Id */
+            id: number;
+            /** Inputs */
+            inputs: {
+                [key: string]: unknown;
+            };
+            /** Rail */
+            rail: string;
+            /** Symbol */
+            symbol: string;
         };
         /** TradingRunDetail */
         TradingRunDetail: {
@@ -9223,6 +9343,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TradingClosedTrade"][];
+                };
+            };
+        };
+    };
+    trading_rails_api_trading_rails_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingRailsStatus"];
                 };
             };
         };

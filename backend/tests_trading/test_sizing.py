@@ -210,14 +210,17 @@ def _two_bot_desk(session_factory, cfg_a, cfg_b):
     desk = DeskNode(specs=specs, session_factory=session_factory, seed_history=lambda s, t: [])
     desk.build()
 
+    feeders = {}
     for spec, fid in (("bot_a", "feed-a"), ("bot_b", "feed-b")):
         feeder = ReplayFeeder(
             bars=build_bars(raw, desk.instruments[spec], "4h"),
             instrument=desk.instruments[spec], interval_ms=5, feeder_id=fid,
             quiescence=lambda s=spec: (
-                desk._strategy_for(s)._k + 1 >= 400 and desk.states[s].order_chain_drained()
+                desk._strategy_for(s)._k + 1 >= feeders[s].emitted
+                and desk.states[s].order_chain_drained()
             ),
         )
+        feeders[spec] = feeder
         desk.node.trader.add_actor(feeder)
     t = threading.Thread(target=desk.node.run, daemon=True)
     t.start()

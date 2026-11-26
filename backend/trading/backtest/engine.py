@@ -52,6 +52,17 @@ class BTConfig:
     # exist to refuse the extremes (tight stops, high approved leverage).
     max_symbol_exposure: float = 5.0
     max_gross_exposure: float = 8.0
+    # Layer-0 hard rails (design §6, trading/rails.py) — per-strategy
+    # configuration, evaluated in the harness BEFORE sizing. The 12% drawdown
+    # kill-switch and the 5% daily loss limit default from settings; the
+    # loss-streak cooldown constants live in risk_guard.py, one definition
+    # for both storage backends. flatten_on_kill is honestly vacuous in the
+    # harness's realized-only accounting — see rails.py's module docstring.
+    killswitch_dd_pct: float = field(default_factory=lambda: get_settings().risk_killswitch_dd_pct)
+    daily_loss_pct: float = field(default_factory=lambda: get_settings().risk_max_daily_loss_pct)
+    loss_streak_max: int = 3
+    cooldown_hours: float = 4.0
+    flatten_on_kill: bool = False
 
     def __post_init__(self):
         if not (self.leverage > 0):

@@ -25,6 +25,7 @@ from app.schemas_trading import (
     TradingClosedTrade,
     TradingPosition,
     TradingRunDetail,
+    TradingRailsStatus,
     TradingRunItem,
     TradingStatus,
     TradingStrategy,
@@ -83,6 +84,107 @@ def _as_iso(value) -> str | None:
     return str(value)
 
 
+def _strategies_registered(db: Session) -> int:
+    """Lifecycle-registry registration count — 0 on any database without the
+    tables, because absent tables mean absent registrations, never an error."""
+    try:
+        from trading.models import Strategy as StrategyRow
+
+        return len(db.execute(select(StrategyRow.id)).all())
+    except (OperationalError, SQLAlchemyError):
+        return 0
+
+
+@router.get("/rails", response_model=TradingRailsStatus)
+def trading_rails(db: Session = Depends(get_trading_db)) -> dict:
+    """Per-bot rail state: the kill-switches, the daily loss consumed, the
+    loss-streak cooldown, exposure against the caps, and the recent
+    risk_events the rails wrote to explain themselves.
+
+    Sources, honestly separated: the manual kill-switch and the halt
+    sentinel are read LIVE (they are external halts — a cached answer would
+    be a lie by design), the per-bot rails come from the desk runner's
+    snapshots (kernel memory is the truth; the snapshot is its rendering),
+    and the events come from the risk_events table. Empty is the first-class
+    answer: an engine that never ran has rails and no rail state."""
+    import os
+    from pathlib import Path
+
+    from trading.models import RiskEvent, get_state
+
+    # external halts, live — never cached
+    ks_row = db.get(BotStatus, "__killswitch")
+    manual_tripped = bool(ks_row and ks_row.running is False)
+    manual_note = ks_row.note if ks_row else ""
+    sentinel_path = str(Path(get_settings().data_dir) / "HALT")
+
+    bots: list[dict] = []
+    try:
+        names = [
+            row.name
+            for row in db.execute(select(BotStatus)).scalars()
+            if row.name.startswith("__state_rails/")
+        ]
+    except (OperationalError, SQLAlchemyError):
+        names = []
+    for name in sorted(names):
+        bot = name[len("__state_rails/"):]
+        snap = get_state(db, f"rails/{bot}", None)
+        if not isinstance(snap, dict):
+            continue
+        bots.append(
+            {
+                "bot": bot,
+                "asof": snap.get("written_at"),
+                "equity": snap.get("equity", 0.0),
+                "peak_equity": snap.get("peak_equity", 0.0),
+                "drawdown_pct": snap.get("drawdown_pct", 0.0),
+                "killswitch_dd_pct": snap.get("killswitch_dd_pct", 0.0),
+                "kill_tripped": bool(snap.get("kill_tripped", False)),
+                "daily_loss": snap.get("daily_loss", 0.0),
+                "daily_loss_limit": snap.get("daily_loss_limit", 0.0),
+                "daily_loss_consumed": snap.get("daily_loss_consumed", 0.0),
+                "daily_breached": bool(snap.get("daily_breached", False)),
+                "loss_streak": snap.get("loss_streak", 0),
+                "max_losses": snap.get("max_losses", 3),
+                "cooldown_remaining_s": snap.get("cooldown_remaining_s", 0.0),
+                "vetoes_total": snap.get("vetoes_total", 0),
+                "exposure": snap.get("exposure"),
+            }
+        )
+
+    events: list[dict] = []
+    try:
+        rows = (
+            db.execute(select(RiskEvent).order_by(RiskEvent.id.desc()).limit(25))
+            .scalars()
+            .all()
+        )
+        events = [
+            {
+                "id": r.id,
+                "created_at": _as_iso(r.created_at),
+                "bot": r.bot,
+                "symbol": r.symbol,
+                "rail": r.rail,
+                "decision": r.decision,
+                "inputs": json.loads(r.inputs_json or "{}"),
+            }
+            for r in rows
+        ]
+    except (OperationalError, SQLAlchemyError):
+        events = []
+
+    return {
+        "manual_killswitch": manual_tripped,
+        "manual_killswitch_note": manual_note or "",
+        "halt_sentinel": os.path.exists(sentinel_path),
+        "halt_sentinel_path": sentinel_path,
+        "bots": bots,
+        "recent_events": events,
+    }
+
+
 @router.get("/status", response_model=TradingStatus)
 def trading_status(db: Session = Depends(get_trading_db)) -> dict:
     """Engine state at a glance; offline is an answer, not a failure."""
@@ -123,7 +225,7 @@ def trading_status(db: Session = Depends(get_trading_db)) -> dict:
         "engine_state": engine_state,
         "last_tick_at": _as_iso(last_heartbeat),
         "db_ok": db_ok and present,
-        "strategies_registered": 0,  # lifecycle tables land in M3
+        "strategies_registered": _strategies_registered(db) if db_ok else 0,
         "validations_total": validations_total,
     }
 
@@ -206,12 +308,17 @@ def list_recent_trades(db: Session = Depends(get_trading_db)) -> list[dict]:
 
 
 @router.get("/strategies", response_model=list[TradingStrategy])
-def trading_strategies() -> list[dict]:
-    """The four ported strategies, straight from the static registry.
+def trading_strategies(db: Session = Depends(get_trading_db)) -> list[dict]:
+    """The catalog of ported strategies, with the lifecycle registry's
+    answer beside each: registered means a strategies row exists — the
+    explicit act — never that capital followed it (that is the roster,
+    versions in state paper, which /rails and /status reflect)."""
+    try:
+        from trading.models import Strategy as StrategyRow
 
-    Pure code facts — no database involved, because a registry row that
-    claims lifecycle state before lifecycle tables exist would be lying.
-    """
+        registered_keys = {r.key for r in db.execute(select(StrategyRow)).scalars()}
+    except (OperationalError, SQLAlchemyError):
+        registered_keys = set()
     return [
         {
             "key": spec["key"],
@@ -219,7 +326,7 @@ def trading_strategies() -> list[dict]:
             "timeframe": spec["timeframe"],
             "symbols": spec["symbols"],
             "description": spec["description"],
-            "registered": False,
+            "registered": spec["key"] in registered_keys,
         }
         for spec in STRATEGIES.values()
     ]

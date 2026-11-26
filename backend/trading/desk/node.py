@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from trading.backtest.engine import BTConfig
 from trading.harness import wrap as harness_wrap
@@ -48,15 +49,18 @@ PAPER_VENUE = "PAPER"
 
 @dataclass
 class DeskSpec:
-    """One strategy-instrument pair the desk trades. The roster is static in
-    slice 1 by design — the lifecycle registry that will eventually own it
-    is slice 4's seam, and nothing here presumes its shape beyond a list."""
+    """One strategy-instrument pair the desk trades. Since slice 4 the roster
+    comes from the lifecycle registry (trading/registry.py: versions in state
+    `paper`); the node itself only ever sees a list of these. `strategy_params`
+    is the registered version's parameter set — applied to the constructor,
+    which register_version already proved accepts them."""
 
     bot: str
     symbol: str
     timeframe: str
     strategy_cls: type
     bt_config: BTConfig = field(default_factory=BTConfig)
+    strategy_params: dict = field(default_factory=dict)
 
 
 def make_harness_config():
@@ -128,6 +132,20 @@ class DeskNode:
         self.states: dict[str, HarnessRunState] = {}
         self.ledger = None
         self.node = None
+        # Layer-4 halt sentinel (design §6): existence of this file halts
+        # every entry and defers every re-arm, fail-closed, content never
+        # read. Lives in the scratch data dir next to the worker lock —
+        # an operator creates it when everything else is wrong.
+        from trading.config import get_settings as _gs
+
+        self.halt_sentinel_path = str(Path(_gs().data_dir) / "HALT")
+
+        def _manual_halt_check() -> bool:
+            from trading.risk import killswitch_state
+
+            return bool(killswitch_state(self.session_factory)["tripped"])
+
+        self._manual_halt_check = _manual_halt_check
 
     def _make_hook(self, spec: DeskSpec):
         ledger = self.ledger
@@ -144,19 +162,70 @@ class DeskNode:
 
         return hook
 
+    def _write_risk_event(self, spec: DeskSpec, rail: str, decision: str, inputs: dict, tape_ts: float) -> None:
+        """One risk_events row per firing, written synchronously inside the
+        event — the same provenance discipline as the position ledger (the
+        DB is the record; kernel state is derived). A failed write must not
+        kill the node loop: the firing already vetoed or tripped in memory,
+        which is the rail's job; the row is its explanation."""
+        import json as _json
+
+        from trading.models import RiskEvent
+
+        session = self.session_factory()
+        try:
+            session.add(
+                RiskEvent(
+                    bot=spec.bot,
+                    symbol=spec.symbol,
+                    rail=rail,
+                    decision=decision,
+                    inputs_json=_json.dumps(inputs, default=str),
+                    tape_ts=float(tape_ts or 0.0),
+                )
+            )
+            session.commit()
+        except Exception:
+            session.rollback()
+            log.exception("risk_events write failed for %s — the firing stands, its explanation is missing", spec.bot)
+        finally:
+            session.close()
+
     def _make_veto_hook(self, spec: DeskSpec):
-        """Exposure-cap vetoes leave the run state through here: logged with
-        the bot's identity and every input number — a rail that cannot
-        explain itself is removed, not trusted (design §6). Slice 4's risk
-        events table is the DB seam; until it exists the veto tape lives in
-        HarnessRunState.vetoes, which the run returns wholesale."""
+        """Every refused entry — sizing caps and Layer-0 rails share the veto
+        tape — becomes a risk_events row with the inputs the refusal stands
+        on: a rail that cannot explain itself is removed, not trusted
+        (design §6)."""
 
         def hook(veto: dict) -> None:
             log.warning("entry vetoed [%s/%s]: %s", spec.bot, spec.symbol, veto)
+            rail = veto.get("rail") or veto.get("reason", "unknown")
+            inputs = {k: v for k, v in veto.items() if k not in ("rail", "reason")}
+            merged = dict(veto.get("inputs") or {})
+            merged.update(inputs)
+            self._write_risk_event(spec, rail, "veto", merged, float(veto.get("tape_ts") or 0.0))
 
         return hook
 
+    def _make_rail_hook(self, spec: DeskSpec):
+        """Non-veto firings — kill-switch trips, daily-loss breaches, cooldown
+        starts, halt observations — the risk_events rows that explain how the
+        rails GOT to a veto."""
+
+        def hook(event: dict) -> None:
+            self._write_risk_event(
+                spec, event["rail"], event["decision"], event.get("inputs") or {}, float(event.get("ts") or 0.0)
+            )
+
+        return hook
+
+
     def _realized_total(self) -> float:
+        if not self.states:
+            # an empty roster has no desk equity beyond the initial stake —
+            # and nothing ever calls this on one, but the honest answer must
+            # exist anyway
+            return self.initial_equity
         return sum(s.realized_net for s in self.states.values()) - self.initial_equity * (
             len(self.states) - 1
         )
@@ -173,7 +242,12 @@ class DeskNode:
 
         # one ledger per desk; interval comes from the specs (single-TF desks
         # dominate slice 1; mixed TFs key the conversion per spec at write time)
-        self.ledger = DeskLedger(self.session_factory, TIMEFRAME_NS[self.specs[0].timeframe])
+        # empty rosters are first-class (slice 4: zero validated strategies is
+        # the gate working, and the desk that boots empty must boot); the
+        # interval default only matters to fill-time conversion, which no
+        # strategyless desk ever performs
+        interval_ns = TIMEFRAME_NS[self.specs[0].timeframe] if self.specs else TIMEFRAME_NS["4h"]
+        self.ledger = DeskLedger(self.session_factory, interval_ns)
 
         exec_clients = exec_config or {
             self.venue: SandboxExecutionClientConfig(
@@ -237,8 +311,15 @@ class DeskNode:
             # ONE book per desk, handed to every strategy: the gross
             # exposure cap is desk-wide by construction (design §10,
             # multi-symbol), not a sum of per-bot blind spots.
-            state = HarnessRunState(self.initial_equity, on_position_event=self._make_hook(spec), exposure_book=self._exposure_book)
+            state = HarnessRunState(
+                self.initial_equity,
+                on_position_event=self._make_hook(spec),
+                exposure_book=self._exposure_book,
+                manual_halt_check=self._manual_halt_check,
+                halt_sentinel_path=self.halt_sentinel_path,
+            )
             state.on_veto = self._make_veto_hook(spec)
+            state.on_rail_event = self._make_rail_hook(spec)
             health = FeedHealth(timeout_s=self.feed_stale_after_s)
             state.on_bar_processed = health.beat
             self.feed_health[spec.bot] = health
@@ -251,7 +332,10 @@ class DeskNode:
                     bar_spec=TIMEFRAME_BAR_SPEC[spec.timeframe],
                     harness_state=state,
                     frame_source=frame,
-                    pure_strategy=harness_wrap(spec.strategy_cls()),
+                    # the registered version's parameter set, proven to
+                    # construct at registration time — params are part of what
+                    # the lifecycle validated, never a runtime opinion
+                    pure_strategy=harness_wrap(spec.strategy_cls(**spec.strategy_params)),
                     bt_config=spec.bt_config,
                 )
             )

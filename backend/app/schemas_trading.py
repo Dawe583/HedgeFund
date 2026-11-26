@@ -30,6 +30,61 @@ class TradingStatus(BaseModel):
     validations_total: int
 
 
+class TradingRailExposure(BaseModel):
+    instrument_notional: float
+    gross_notional: float
+    symbol_cap: float
+    gross_cap: float
+
+
+class TradingBotRails(BaseModel):
+    """One bot's rail state as the desk's snapshot last wrote it — every
+    number the rails themselves computed, plus the exposure book's slice.
+    `asof` is the snapshot's write time: the UI says when this was true,
+    because a rail state without a clock is a rumor."""
+
+    bot: str
+    asof: str | None
+    equity: float
+    peak_equity: float
+    drawdown_pct: float
+    killswitch_dd_pct: float
+    kill_tripped: bool
+    daily_loss: float
+    daily_loss_limit: float
+    daily_loss_consumed: float
+    daily_breached: bool
+    loss_streak: int
+    max_losses: int
+    cooldown_remaining_s: float
+    vetoes_total: int
+    exposure: TradingRailExposure | None
+
+
+class TradingRiskEvent(BaseModel):
+    id: int
+    created_at: dt.datetime | None
+    bot: str
+    symbol: str
+    rail: str
+    decision: str
+    inputs: dict[str, Any]
+
+
+class TradingRailsStatus(BaseModel):
+    """The desk's rail state at a glance. `bots` empty is the honest answer
+    for an engine that never ran — and for the M3 end state of a registry
+    with zero validated strategies: rails exist, nothing trades beneath
+    them, and the strip says so."""
+
+    manual_killswitch: bool
+    manual_killswitch_note: str
+    halt_sentinel: bool
+    halt_sentinel_path: str
+    bots: list[TradingBotRails]
+    recent_events: list[TradingRiskEvent]
+
+
 class TradingStrategy(BaseModel):
     key: str
     name: str

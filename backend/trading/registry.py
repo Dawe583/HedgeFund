@@ -1,0 +1,262 @@
+"""The lifecycle registry — what the engine may trade, and how it got there
+(design §6 layer 1, §7 registration).
+
+The static STRATEGIES dict in research.py stays the CATALOG of available
+code; this module is the act of registration. Nothing trades for existing in
+the catalog — a version reaches the desk's roster only by walking the state
+machine:
+
+    research → validated → paper → candidate_live → live
+
+Transition guards (the only write paths in this module):
+- research → validated: ONLY with a backtest_validations row for this exact
+  version — verdict "validated", matching bot/strategy key and parameter
+  set. No evidence, no transition.
+- validated → paper: unconditional, automatic — paper is free. (The CLI
+  chains it the moment validation lands.)
+- paper → candidate_live: REFUSES without an approvals row for this version
+  and transition. The approval-card flow that writes those rows is M4; the
+  approvals table exists now as the honest stub, so the guard is real code
+  against a real table, not a TODO.
+- candidate_live → live: additionally refuses unconditionally in M3 — the
+  mandate that must accompany it is M5, and a transition whose mandatory
+  companion cannot exist is refused outright.
+- everything else — backward, equal, skipped states: refused.
+
+The AI rule (design §6): the model may never transition a state. These
+functions are deterministic code called by humans and the validation CLI;
+there is no agent path into this module.
+
+The roster: versions whose latest state is `paper`. With zero validated
+strategies the roster is empty, the desk boots empty, and that emptiness IS
+the gate working — the honest M3 end state.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import inspect
+import json
+
+from sqlalchemy import select
+
+from trading.models import (
+    Approval,
+    BacktestValidation,
+    Strategy,
+    StrategyState,
+    StrategyVersion,
+)
+
+STATES = ("research", "validated", "paper", "candidate_live", "live")
+
+# forward edges and what each demands: the guard table the design's prose
+# compiles to. candidate_live→live lists the approval it needs AND refuses
+# outright in M3 — the mandate (M5) is a mandatory companion that cannot
+# exist yet.
+_FORWARD = {
+    ("research", "validated"),
+    ("validated", "paper"),
+    ("paper", "candidate_live"),
+    ("candidate_live", "live"),
+}
+
+
+class TransitionRefused(Exception):
+    """The guard's only answer besides the row. Carries the reason — a
+    refusal that cannot explain itself is a bug, same rule as the rails."""
+
+
+def code_hash_of(cls) -> str:
+    """Content hash of the strategy class's source — the version's claim
+    about WHAT code it is. Two versions sharing logic but not parameters
+    share the hash; an edit to the class makes every pre-edit version's hash
+    honest evidence of a different experiment."""
+    try:
+        src = inspect.getsource(cls)
+    except (OSError, TypeError):
+        src = repr(cls)
+    return hashlib.sha256(src.encode()).hexdigest()[:16]
+
+
+def _current_state(session, version_id: int) -> str | None:
+    row = (
+        session.execute(
+            select(StrategyState)
+            .where(StrategyState.version_id == version_id)
+            .order_by(StrategyState.id.desc())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    return row.state if row else None
+
+
+def register_strategy(session, key: str, name: str) -> Strategy:
+    """Idempotent by key — registration is an act, re-running it is not a
+    second act."""
+    row = session.execute(select(Strategy).where(Strategy.key == key)).scalars().first()
+    if row is not None:
+        return row
+    row = Strategy(key=key, name=name)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def register_version(
+    session,
+    key: str,
+    name: str,
+    cls,
+    *,
+    timeframe: str,
+    universe: list[str],
+    params: dict,
+) -> StrategyVersion:
+    """A new version row in state research. The constructor is validated
+    HERE, not at roster time: a version whose params its own class cannot
+    accept is a registration error, and registration is the cheap place to
+    say so."""
+    try:
+        cls(**params)
+    except TypeError as exc:
+        raise TransitionRefused(
+            f"params {sorted(params)} do not construct {cls.__name__}: {exc}"
+        ) from exc
+    strategy = register_strategy(session, key, name)
+    latest = (
+        session.execute(
+            select(StrategyVersion)
+            .where(StrategyVersion.strategy_id == strategy.id)
+            .order_by(StrategyVersion.version.desc())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    version = StrategyVersion(
+        strategy_id=strategy.id,
+        version=(latest.version + 1) if latest else 1,
+        params_json=json.dumps(params, sort_keys=True),
+        code_hash=code_hash_of(cls),
+        timeframe=timeframe,
+        universe_json=json.dumps(list(universe)),
+    )
+    session.add(version)
+    session.flush()
+    session.add(StrategyState(version_id=version.id, state="research", note="registered"))
+    session.flush()
+    return version
+
+
+def transition(session, version_id: int, to_state: str, *, validation_id: int | None = None, note: str = "") -> StrategyState:
+    """The state machine's only write path. Refuses loudly — TransitionRefused
+    with the reason — and never writes anything on a refusal."""
+    if to_state not in STATES:
+        raise TransitionRefused(f"unknown state {to_state!r}")
+    version = session.get(StrategyVersion, version_id)
+    if version is None:
+        raise TransitionRefused(f"strategy version {version_id} does not exist")
+    current = _current_state(session, version_id)
+    if current is None:
+        raise TransitionRefused(f"strategy version {version_id} has no initial state row")
+    edge = (current, to_state)
+    if edge not in _FORWARD:
+        raise TransitionRefused(
+            f"{current} → {to_state} is not a forward single-step transition "
+            f"(state is the latest row; re-basing is impossible)"
+        )
+
+    evidence = ""
+    if edge == ("research", "validated"):
+        if validation_id is None:
+            raise TransitionRefused(
+                "research → validated requires a validation row — no evidence, no transition"
+            )
+        row = session.get(BacktestValidation, validation_id)
+        if row is None:
+            raise TransitionRefused(f"validation row {validation_id} does not exist")
+        if row.verdict != "validated":
+            raise TransitionRefused(
+                f"validation row {validation_id} says {row.verdict!r}, not 'validated'"
+            )
+        strategy = session.get(Strategy, version.strategy_id)
+        if row.bot != strategy.key:
+            raise TransitionRefused(
+                f"validation row {validation_id} is for bot {row.bot!r}, not {strategy.key!r}"
+            )
+        if json.loads(row.params_json or "{}") != json.loads(version.params_json or "{}"):
+            raise TransitionRefused(
+                "validation row params do not match this version's params — "
+                "the evidence belongs to a different experiment"
+            )
+        evidence = f"validation:{validation_id}"
+    elif edge == ("paper", "candidate_live"):
+        approval = (
+            session.execute(
+                select(Approval).where(
+                    Approval.version_id == version_id,
+                    Approval.transition == "paper->candidate_live",
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if approval is None:
+            raise TransitionRefused(
+                "paper → candidate_live requires a human approval card — the approvals "
+                "table is the stub M4 fills, and it holds no row for this version"
+            )
+        evidence = f"approval:{approval.id}"
+    elif edge == ("candidate_live", "live"):
+        # the design's 'approval card PLUS a mandate' — the mandate is M5 and
+        # does not exist, so this transition cannot be satisfied at all in M3
+        raise TransitionRefused(
+            "candidate_live → live requires a mandate (M5), which does not exist — "
+            "live transitions are structurally impossible in M3"
+        )
+
+    row = StrategyState(version_id=version_id, state=to_state, evidence=evidence, note=note)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def validate_and_promote(session, version_id: int, validation_id: int) -> list[StrategyState]:
+    """The automatic chain: research → validated on the validation row's
+    evidence, then validated → paper because paper is free. Both rows in one
+    call because neither is a human decision — the human decisions are
+    exactly the ones this function does not make."""
+    out = [transition(session, version_id, "validated", validation_id=validation_id)]
+    out.append(transition(session, version_id, "paper", note="automatic — paper is free"))
+    return out
+
+
+def roster(session) -> list[dict]:
+    """The desk's roster: every version whose LATEST state row is `paper`,
+    with what the desk needs to boot it. Empty is the honest answer — with
+    zero validated strategies the lifecycle owns nothing, and the desk that
+    boots from this roster trades nothing."""
+    versions = session.execute(select(StrategyVersion)).scalars().all()
+    strategies = {s.id: s for s in session.execute(select(Strategy)).scalars().all()}
+    out = []
+    for v in versions:
+        if _current_state(session, v.id) != "paper":
+            continue
+        strategy = strategies[v.strategy_id]
+        out.append(
+            {
+                "version_id": v.id,
+                "key": strategy.key,
+                "name": strategy.name,
+                "bot": f"{strategy.key}-v{v.version}",
+                "version": v.version,
+                "params": json.loads(v.params_json or "{}"),
+                "timeframe": v.timeframe,
+                "universe": json.loads(v.universe_json or "[]"),
+                "code_hash": v.code_hash,
+            }
+        )
+    return sorted(out, key=lambda r: r["bot"])

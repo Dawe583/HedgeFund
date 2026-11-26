@@ -114,6 +114,30 @@ rails, kill-switch dashboard wiring. Acceptance: the lifecycle owns what the
 engine may trade — with zero validated strategies today, the honest M3 end
 state is an engine that is *ready* and *empty*, which is the gate working.
 
+Implementation notes (landed 2026-11-26):
+- **Pre-registry residents.** The soak's running bots (`scalp` on 1m and 4h)
+  were booted before the registry existed, from the runner's since-deleted
+  static `--bot` path. They are unaffected — a booted process reads no
+  registry — and they are NOT migrated into it: a lifecycle row written
+  retroactively for a version that never passed the validation gate would
+  be a lie, and the tables are the one place the design does not lie. The
+  production migration path is forward-only: when a strategy is validated
+  (`trading.research validate`) and registered (`trading.research
+  register`), the registry-driven runner boots it as `<key>-v<N>` under the
+  same flock — a new resident beside the legacy book, whose pre-registry
+  trades remain provenance of the pre-registry era and nothing more. The
+  `--bot` CLI was removed, not deprecated: a fallback roster is precisely
+  the gate not working.
+- **Layer-4 halt sentinel**: `<data_dir>/HALT` — existence halts entries and
+  defers re-arms; protective orders and closes always flow. In paper the
+  harness submission path is the venue boundary (the sandbox is
+  kernel-internal); the design's venue-adapter phrasing binds when a real
+  adapter exists.
+- **flatten-on-trip** defaults off and is honestly vacuous in the harness's
+  realized-only accounting: the trip is detected at a settle, the position
+  that caused it has already closed, and open positions never move realized
+  equity. The flag exists for mark-to-market rails.
+
 ### Slice 5 — divergence budget + dashboard
 
 Design §7: declared per-strategy drift budget paper-vs-backtest, surfaced in

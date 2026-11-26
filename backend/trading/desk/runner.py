@@ -33,20 +33,42 @@ from trading.models import init_schema, make_engine, make_session_factory
 
 log = logging.getLogger("trading.desk.runner")
 
-BOT_REGISTRY = {
-    "scalp": "trading.bots.scalp_bot:ScalpTrend",
-    "hft": "trading.bots.hft_bot:HFTMomentum",
-    "breakout": "trading.bots.breakout_bot:BreakoutVol",
-    "meanrev": "trading.bots.meanrev_bot:MeanRev",
-}
+def resolve_roster_specs(session_factory) -> list:
+    """The desk's roster IS the lifecycle registry: every strategy version in
+    state `paper` becomes one DeskSpec per universe symbol, parameters and
+    timeframe as registered. Nothing else trades — the static STRATEGIES
+    catalog is available code, never capital. An empty roster is the honest
+    end state of a registry with zero validated strategies: the desk boots
+    empty and that emptiness is the gate working, not a bug."""
+    from trading.desk.node import DeskSpec
+    from trading.registry import roster
+    from trading.research import STRATEGIES
 
-
-def _resolve_bot(name: str):
-    import importlib
-
-    path = BOT_REGISTRY[name]
-    module_name, cls_name = path.split(":")
-    return getattr(importlib.import_module(module_name), cls_name)
+    specs = []
+    session = session_factory()
+    try:
+        entries = roster(session)
+    finally:
+        session.close()
+    for entry in entries:
+        catalog = STRATEGIES.get(entry["key"])
+        if catalog is None:
+            log.error(
+                "registered version %s v%d references catalog key %r which no longer exists — skipped, never silently traded",
+                entry["key"], entry["version"], entry["key"],
+            )
+            continue
+        for symbol in entry["universe"]:
+            specs.append(
+                DeskSpec(
+                    bot=f"{entry['bot']}-{symbol.lower()}" if len(entry["universe"]) > 1 else entry["bot"],
+                    symbol=symbol,
+                    timeframe=entry["timeframe"],
+                    strategy_cls=catalog["cls"],
+                    strategy_params=entry["params"],
+                )
+            )
+    return specs
 
 
 def load_seed_history():
@@ -66,9 +88,6 @@ def load_seed_history():
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(prog="trading.desk.runner")
-    p.add_argument("--symbol", default="BTCUSDT")
-    p.add_argument("--timeframe", default="4h", choices=sorted(TIMEFRAME_NS))
-    p.add_argument("--bot", default="scalp", choices=sorted(BOT_REGISTRY))
     p.add_argument(
         "--stale-after",
         type=float,
@@ -79,25 +98,31 @@ def parse_args(argv=None):
 
 
 def build_desk(args, seed_history):
+    """Boot the desk the registry owns. Returns None when the roster is
+    empty — with zero validated strategies the lifecycle permits nothing,
+    and a desk trading a static fallback list would be the gate NOT working."""
     from trading.desk.live import build_production_desk
-    from trading.desk.node import DeskSpec
 
     settings = get_settings()
     engine = make_engine(settings.database_url)
     init_schema(engine)
     session_factory = make_session_factory(engine)
 
-    interval_s = TIMEFRAME_NS[args.timeframe] / 1e9
+    specs = resolve_roster_specs(session_factory)
+    if not specs:
+        log.warning(
+            "roster empty: no strategy version in state paper — the desk boots nothing. "
+            "Validate a strategy (trading.research validate) and register it "
+            "(trading.research register) to make the roster non-empty."
+        )
+        return None
+    # mixed-timeframe rosters use the tightest interval for the staleness
+    # floor — a loose timeout on the fastest bot hides its death
+    interval_s = min(TIMEFRAME_NS[s.timeframe] for s in specs) / 1e9
     stale_after = args.stale_after if args.stale_after is not None else max(120.0, 1.5 * interval_s)
 
-    spec = DeskSpec(
-        bot=args.bot,
-        symbol=args.symbol,
-        timeframe=args.timeframe,
-        strategy_cls=_resolve_bot(args.bot),
-    )
     return build_production_desk(
-        specs=[spec],
+        specs=specs,
         session_factory=session_factory,
         seed_history=seed_history,
         feed_stale_after_s=stale_after,
@@ -165,13 +190,59 @@ def write_heartbeats(desk, running: bool) -> None:
 
 
 
+def write_rail_snapshots(desk) -> None:
+    """Per-bot rail state into the kv store — the /api/trading/rails endpoint
+    reads these rows. Written at the monitor cadence beside the heartbeats:
+    the rails themselves live in kernel memory (correctly — they measure the
+    tape, not the wall), and this snapshot is the honest rendering of what
+    they last computed, never a second source of truth. Same failure
+    discipline as the heartbeats: a failed write is a symptom to log."""
+    import time as _time
+
+    from trading.models import set_state
+
+    session = desk.session_factory()
+    try:
+        now_s = _time.time()
+        for spec in desk.specs:
+            state = desk.states[spec.bot]
+            rails = state.rails
+            if rails is None:
+                continue
+            book = state.exposure_book
+            # per-bot instrument notional: key the book by the instrument
+            # prefix this bot trades — the book is desk-wide by design, and
+            # the per-bot slice of it is what belongs in the bot's row
+            prefix = spec.symbol.upper()
+            bot_notional = sum(
+                book.instrument_notional(iid) for iid in list(book._by_instrument) if iid.startswith(prefix)
+            )
+            snap = rails.snapshot(now_s, state.realized_net)
+            snap["exposure"] = {
+                "instrument_notional": round(bot_notional, 6),
+                "gross_notional": round(book.gross_notional(), 6),
+                "symbol_cap": spec.bt_config.max_symbol_exposure,
+                "gross_cap": spec.bt_config.max_gross_exposure,
+            }
+            snap["vetoes_total"] = len(state.vetoes)
+            import datetime as _dt
+
+            snap["written_at"] = _dt.datetime.now(_dt.UTC).isoformat()
+            set_state(session, f"rails/{spec.bot}", snap)
+    except Exception:
+        session.rollback()
+        log.exception("rail snapshot write failed — /api/trading/rails goes stale")
+    finally:
+        session.close()
+
+
+
 def main(argv=None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     args = parse_args(argv)
-
     from trading.desk.worker import acquire_worker_lock
 
     lock = acquire_worker_lock()
@@ -186,6 +257,13 @@ def main(argv=None) -> int:
     except Exception:
         log.exception("desk build failed")
         return 1
+    if desk is None:
+        # the gate working: zero validated strategies means an empty roster
+        # means nothing trades. Clean exit, not a crash — there is no book
+        # to supervise, and a restart loop against this exit code costs the
+        # operator nothing but a log line.
+        print("STATUS " + json.dumps({"roster": "empty", "detail": "no strategy version in state paper — the engine is ready and empty"}), flush=True)
+        return 0
 
     for spec in desk.specs:
         rows = len(desk.frames[spec.bot])
@@ -217,8 +295,12 @@ def main(argv=None) -> int:
     started = time.monotonic()
     t = threading.Thread(target=desk.node.run, daemon=True, name="desk-node")
     t.start()
-    log.info("node running: %s %s %s on the live binance tape", args.bot, args.symbol, args.timeframe)
+    log.info(
+        "node running: %s on the live binance tape",
+        ", ".join(f"{s.bot} {s.symbol} {s.timeframe}" for s in desk.specs),
+    )
     write_heartbeats(desk, running=True)  # light the lamp at boot, not first cadence
+    write_rail_snapshots(desk)
     # monitor: STATUS evidence every 60s; the short join tick keeps SIGTERM
     # latency at seconds — a 60s join would make every shutdown wait out the
     # current tick (measured: 52s from signal to stop with join(60))
@@ -229,6 +311,7 @@ def main(argv=None) -> int:
             last_status = time.monotonic()
             print(status_line(desk, started), flush=True)
             write_heartbeats(desk, running=True)
+            write_rail_snapshots(desk)
     # any node-thread death the runner did not request is abnormal: a fatal
     # error inside the kernel, or an internal shutdown nothing ordered —
     # either way the desk is no longer trading and the supervisor must know

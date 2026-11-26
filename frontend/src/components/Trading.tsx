@@ -4,6 +4,7 @@ import {
   getBacktestRuns,
   getRecentTrades,
   getTradingPositions,
+  getTradingRails,
   getTradingStatus,
   getTradingStrategies,
   type BacktestRun,
@@ -12,6 +13,7 @@ import {
   type RunProvenance,
   type TradingClosedTrade,
   type TradingPosition,
+  type TradingRailsStatus,
   type TradingStatus,
   type TradingStrategy,
 } from "../api/trading";
@@ -633,6 +635,160 @@ function RecentTradesStrip({ trades }: { trades: TradingClosedTrade[] }) {
   );
 }
 
+/* ---- The rails strip -----------------------------------------------------
+
+   Layer 0 in the terminal idiom: one hairline table, dense mono figures,
+   status lamps as small squares like the engine lamp, consumed fractions
+   as thin bars. Every number is the desk's own snapshot — the strip says
+   when it was true (the asof), because rail state without a clock is a
+   rumor. The honest empties are three different sentences again: no
+   engine ever ran (no snapshots exist), the engine runs with an empty
+   roster (the gate working — nothing is registered for paper), and rows
+   exist (the strip itself). */
+
+function RailLamp({ tripped, title }: { tripped: boolean; title: string }) {
+  return (
+    <span
+      title={title}
+      aria-hidden="true"
+      className={"inline-block h-2 w-2 align-baseline " + (tripped ? "bg-down" : "bg-up")}
+    />
+  );
+}
+
+/** The consumed-fraction bar: a hairline box, the fill proportional to
+    `fraction` of the rail's budget spent. Widths are clamped — a breach
+    reads full, never overflowed, because over-100% IS the full bar. */
+function FractionBar({ fraction, breached }: { fraction: number; breached: boolean }) {
+  const pct = Math.max(0, Math.min(1, fraction)) * 100;
+  return (
+    <span className="inline-flex h-2.5 w-16 items-stretch border border-rule" aria-hidden="true">
+      <span className={(breached ? "bg-down" : "bg-warn") + " block"} style={{ width: `${pct}%` }} />
+    </span>
+  );
+}
+
+function fmtCooldown(seconds: number): string {
+  if (seconds <= 0) return "—";
+  const m = Math.ceil(seconds / 60);
+  if (m >= 60) return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+  return `${m}m`;
+}
+
+export function RailsStrip({ rails }: { rails: TradingRailsStatus }) {
+  const anyHalt = rails.manual_killswitch || rails.halt_sentinel;
+  return (
+    <div className="mb-3">
+      {/* the desk-wide external halts first — they outrank every per-bot
+          number below, and the strip says so before anything else */}
+      {(rails.manual_killswitch || rails.halt_sentinel) && (
+        <div className="mb-2 border-l-2 border-down bg-down-tint px-3 py-1.5 font-mono text-xs text-down">
+          {rails.manual_killswitch && (
+            <span className="mr-4">
+              ■ manual kill-switch TRIPPED{rails.manual_killswitch_note ? ` — ${rails.manual_killswitch_note}` : ""}
+            </span>
+          )}
+          {rails.halt_sentinel && (
+            <span>■ halt sentinel file present — every entry halted</span>
+          )}
+        </div>
+      )}
+      {rails.bots.length === 0 ? (
+        <p className="text-sm text-ink-soft">
+          No rail state — the desk has written no rail snapshots yet.
+          {!anyHalt &&
+            " With zero strategies registered for paper, the roster is empty and the rails have nothing beneath them — the gate working, not a missing panel."}
+        </p>
+      ) : (
+        <div className={cardClass + " overflow-x-auto"}>
+          <table className="w-full border-collapse font-mono text-xs">
+            <thead>
+              <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
+                <th className="px-3 py-1.5 text-left font-medium">Bot</th>
+                <th className="px-3 py-1.5 text-left font-medium">Kill</th>
+                <th className="px-3 py-1.5 text-left font-medium">Drawdown</th>
+                <th className="px-3 py-1.5 text-left font-medium">Daily loss</th>
+                <th className="px-3 py-1.5 text-left font-medium">Streak</th>
+                <th className="px-3 py-1.5 text-left font-medium">Cooldown</th>
+                <th className="px-3 py-1.5 text-right font-medium">Exposure</th>
+                <th className="px-3 py-1.5 text-right font-medium">Vetoes</th>
+                <th className="px-3 py-1.5 text-right font-medium">As of</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rails.bots.map((b) => {
+                const killTitle = b.kill_tripped
+                  ? `tripped — drawdown ${(b.drawdown_pct * 100).toFixed(1)}% reached the ${(b.killswitch_dd_pct * 100).toFixed(0)}% rail; entries vetoed for the run's lifetime`
+                  : `clear — drawdown ${(b.drawdown_pct * 100).toFixed(1)}% of the ${(b.killswitch_dd_pct * 100).toFixed(0)}% rail`;
+                return (
+                  <tr key={b.bot} className="border-b border-hair last:border-b-0">
+                    <td className="px-3 py-1 text-ink">{b.bot}</td>
+                    <td className="px-3 py-1">
+                      <RailLamp tripped={b.kill_tripped} title={killTitle} />
+                    </td>
+                    <td className="px-3 py-1 tabular-nums text-ink" title={killTitle}>
+                      {(b.drawdown_pct * 100).toFixed(1)}% / {(b.killswitch_dd_pct * 100).toFixed(0)}%
+                    </td>
+                    <td
+                      className="px-3 py-1"
+                      title={`${b.daily_loss.toFixed(2)} lost of the ${b.daily_loss_limit.toFixed(2)} daily budget${b.daily_breached ? " — breached, entries vetoed for the rest of the UTC day" : ""}`}
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <FractionBar fraction={b.daily_loss_consumed} breached={b.daily_breached} />
+                        <span className={"tabular-nums " + (b.daily_breached ? "text-down" : "text-ink")}>
+                          {(b.daily_loss_consumed * 100).toFixed(0)}%
+                        </span>
+                      </span>
+                    </td>
+                    <td
+                      className="px-3 py-1 tabular-nums text-ink"
+                      title={`${b.loss_streak} consecutive losses of ${b.max_losses} that arm the cooldown`}
+                    >
+                      {b.loss_streak}/{b.max_losses}
+                    </td>
+                    <td
+                      className={"px-3 py-1 tabular-nums " + (b.cooldown_remaining_s > 0 ? "text-warn" : "text-ink-faint")}
+                      title={b.cooldown_remaining_s > 0 ? "cooldown after a loss streak — entries vetoed until it expires" : "no cooldown active"}
+                    >
+                      {fmtCooldown(b.cooldown_remaining_s)}
+                    </td>
+                    <td className="px-3 py-1 text-right tabular-nums text-ink-soft">
+                      {b.exposure
+                        ? `${b.exposure.instrument_notional.toFixed(0)} / ${b.exposure.gross_notional.toFixed(0)}`
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-1 text-right tabular-nums text-ink-soft">{b.vetoes_total}</td>
+                    <td className="px-3 py-1 text-right text-ink-faint">
+                      {b.asof ? fmtClock(b.asof) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {rails.recent_events.length > 0 && (
+        <div className="mt-2">
+          <h4 className={statLabelClass}>Rail events</h4>
+          <div className="mt-1 space-y-0.5 font-mono text-[0.7rem] text-ink-soft">
+            {rails.recent_events.slice(0, 8).map((e) => (
+              <div key={e.id} className="flex flex-wrap gap-x-3" title={JSON.stringify(e.inputs)}>
+                <span className="text-ink-faint">{e.created_at ? fmtClock(e.created_at) : "—"}</span>
+                <span className="text-ink">{e.bot}</span>
+                <span className={e.decision === "veto" ? "text-warn" : "text-down"}>{e.rail}</span>
+                <span>{e.decision}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export const RailsStripForTest = RailsStrip;
+
 function PositionsSection({
   positions,
   trades,
@@ -701,6 +857,7 @@ export default function Trading() {
   const [positionsError, setPositionsError] = useState<string | null>(null);
   const [strategies, setStrategies] = useState<TradingStrategy[] | null>(null);
   const [strategiesError, setStrategiesError] = useState<string | null>(null);
+  const [rails, setRails] = useState<TradingRailsStatus | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -720,6 +877,12 @@ export default function Trading() {
         setPositionsAt(Date.now());
       })
       .catch((e) => alive && setPositionsError(apiError(e, "The positions could not be loaded.")));
+    getTradingRails()
+      .then((r) => alive && setRails(r))
+      .catch(() => {
+        /* the strip is rail evidence; its failure renders as no strip,
+           never as a blank page over the positions beside it */
+      });
     getRecentTrades()
       .then((t) => alive && setTrades(t))
       .catch(() => {
@@ -739,6 +902,7 @@ export default function Trading() {
         title="Positions & risk"
         hint="Open positions as the desk wrote them at the fill — the protective levels each row carries, ages ticking. Settled round-trips below as the desk's recent evidence."
       >
+        {rails !== null && <RailsStrip rails={rails} />}
         <PositionsSection
           positions={positions}
           trades={trades}

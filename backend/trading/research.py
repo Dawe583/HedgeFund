@@ -384,6 +384,69 @@ def validate_strategy(
     }
 
 
+# ---------------------------------------------------------------- register
+
+
+def cmd_register(args: argparse.Namespace) -> int:
+    """Register a strategy version into the lifecycle and walk it as far as
+    the evidence allows. This is how the roster ever becomes non-empty:
+    validate produces the verdict row, register turns the row into lifecycle.
+
+    Params default to the validation row's own — what was validated is what
+    gets registered, never a nearby variant. Anything short of a validated
+    verdict row leaves the version in research and the output says exactly
+    what the guard refused.
+    """
+    from trading.registry import TransitionRefused, register_version, roster, validate_and_promote
+
+    spec = STRATEGIES.get(args.bot)
+    if spec is None:
+        raise SystemExit(f"unknown bot {args.bot!r}; choices: {sorted(STRATEGIES)}")
+
+    app_engine = make_engine(args.app_db)
+    init_schema(app_engine)
+    app_sf = make_session_factory(app_engine)
+    with app_sf() as session:
+        validation = session.get(BacktestValidation, args.validation_id)
+        if validation is None:
+            raise SystemExit(f"validation row {args.validation_id} not found in {args.app_db}")
+        params = json.loads(args.params) if args.params else json.loads(validation.params_json or "{}")
+        universe = [s.strip().upper() for s in args.universe.split(",") if s.strip()] or [validation.symbol]
+        try:
+            version = register_version(
+                session,
+                args.bot,
+                spec["name"],
+                spec["cls"],
+                timeframe=args.timeframe or validation.timeframe,
+                universe=universe,
+                params=params,
+            )
+            states = []
+            failure = None
+            try:
+                states = validate_and_promote(session, version.id, validation.id)
+            except TransitionRefused as exc:
+                failure = str(exc)
+            session.commit()
+        except TransitionRefused as exc:
+            session.rollback()
+            print(json.dumps({"registered": False, "reason": str(exc)}))
+            return 1
+        out = {
+            "registered": True,
+            "version_id": version.id,
+            "bot": f"{args.bot}-v{version.version}",
+            "state": states[-1].state if states else "research",
+            "roster_size": len(roster(session)),
+        }
+        if failure:
+            out["promotion_refused"] = failure
+        print(json.dumps(out, indent=2))
+        return 0 if states else 1
+    app_engine.dispose()
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     payload = validate_strategy(
         bot_key=args.bot,
@@ -418,6 +481,19 @@ def main(argv: list[str] | None = None) -> int:
     p_val.add_argument("--seed", type=int, default=DEFAULT_SEED)
     p_val.add_argument("--min-trades", type=int, default=MIN_TRADES)
     p_val.set_defaults(fn=cmd_validate)
+
+    p_reg = sub.add_parser(
+        "register",
+        help="register a validated strategy version into the lifecycle registry",
+    )
+    p_reg.add_argument("--bot", required=True, choices=sorted(STRATEGIES))
+    p_reg.add_argument("--validation-id", type=int, required=True,
+                       help="the backtest_validations row this registration stands on")
+    p_reg.add_argument("--timeframe", default=None, help="defaults to the validation row's")
+    p_reg.add_argument("--universe", default="", help="comma-separated symbols; defaults to the validation row's symbol")
+    p_reg.add_argument("--params", default=None, help="JSON object; defaults to the validation row's own params")
+    p_reg.add_argument("--app-db", default=DEFAULT_APP_DB, help="database the lifecycle rows land in")
+    p_reg.set_defaults(fn=cmd_register)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")

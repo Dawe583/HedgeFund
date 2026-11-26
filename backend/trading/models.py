@@ -260,6 +260,104 @@ class BacktestValidation(Base):
     engine_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+
+class RiskEvent(Base):
+    """One rail firing, with every input the decision stood on (design §6:
+    "a rail that cannot explain itself is removed, not trusted" — the inputs
+    are the explanation). Written by the desk the moment a rail fires: vetoes
+    of refused entries, kill-switch trips, daily-loss breaches, cooldown
+    starts, halt observations. Append-only by contract — nothing updates or
+    deletes these rows."""
+
+    __tablename__ = "risk_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    bot: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), default="")
+    rail: Mapped[str] = mapped_column(String(48))  # kill_switch_drawdown | daily_loss_limit | ...
+    decision: Mapped[str] = mapped_column(String(24))  # veto | tripped | breached | cooldown_started | observed
+    inputs_json: Mapped[str] = mapped_column(Text, default="{}")
+    # the tape time the rail measured against (bar close), not the write time:
+    # backtest and paper firings are comparable only on the tape's clock
+    tape_ts: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class Strategy(Base):
+    """A registered strategy — code in the catalog made explicit. Existence
+    of this row IS the registration act; the static STRATEGIES dict in
+    research.py stays the catalog of available code, and nothing trades for
+    being in the catalog."""
+
+    __tablename__ = "strategies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(32), unique=True)
+    name: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    versions: Mapped[list["StrategyVersion"]] = relationship(back_populates="strategy")
+
+
+class StrategyVersion(Base):
+    """One parameter set of one strategy — two instances of the same logic
+    with different parameters are two versions, and the lifecycle tracks
+    versions, never strategies (design §7)."""
+
+    __tablename__ = "strategy_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    strategy_id: Mapped[int] = mapped_column(ForeignKey("strategies.id"))
+    version: Mapped[int] = mapped_column(Integer)
+    params_json: Mapped[str] = mapped_column(Text, default="{}")
+    code_hash: Mapped[str] = mapped_column(String(64))
+    timeframe: Mapped[str] = mapped_column(String(8))
+    universe_json: Mapped[str] = mapped_column(String(256), default="[]")  # symbols
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    strategy: Mapped[Strategy] = relationship(back_populates="versions")
+    states: Mapped[list["StrategyState"]] = relationship(back_populates="version")
+
+    __table_args__ = (Index("ix_version_unique", "strategy_id", "version", unique=True),)
+
+
+class StrategyState(Base):
+    """Append-only lifecycle transitions — state is the latest row, re-basing
+    is impossible (design §6 layer 1: the anchor+events discipline again).
+    research → validated → paper → candidate_live → live; the transition
+    guards live in trading/registry.py, this table is only their record."""
+
+    __tablename__ = "strategy_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("strategy_versions.id"), index=True)
+    state: Mapped[str] = mapped_column(String(16))  # research | validated | paper | candidate_live | live
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # what allowed the transition: the validation row id for research→validated,
+    # the approval row id for the human-gated transitions, empty for the
+    # automatic ones — a transition that cannot name its evidence never happened
+    evidence: Mapped[str] = mapped_column(String(128), default="")
+    note: Mapped[str] = mapped_column(String(256), default="")
+
+    version: Mapped[StrategyVersion] = relationship(back_populates="states")
+
+
+class Approval(Base):
+    """The human-gate seam, a thin stub until M4's approval cards. A row is
+    a human's durable assent to ONE lifecycle transition of ONE version;
+    nothing writes rows here yet — the card flow that will is M4 — so every
+    human-gated transition refuses today, which is the gate working, not a
+    missing feature."""
+
+    __tablename__ = "approvals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("strategy_versions.id"), index=True)
+    transition: Mapped[str] = mapped_column(String(32))  # e.g. paper->candidate_live
+    approved_by: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    note: Mapped[str] = mapped_column(String(256), default="")
+
 def make_engine(url: str | None = None):
     """A connection engine. Never DDL.
 

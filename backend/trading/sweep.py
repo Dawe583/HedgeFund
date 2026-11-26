@@ -31,9 +31,13 @@ def evaluate_cell(payload: dict) -> dict:
     and is reconstructed here from the registry."""
     from trading.backtest.engine import BTConfig
     from trading.bots.trend_bot import TrendMomentum
+    from trading.bots.meanrev_regime_bot import MeanRevRegime
     from trading.search import Candidate, evaluate_candidate, in_sample, load_frame, open_ledger, out_of_sample, rails_off_config
 
-    makers = {"trendmom": lambda p: TrendMomentum(**p)}
+    makers = {
+        "trendmom": lambda p: TrendMomentum(**p),
+        "meanrevregime": lambda p: MeanRevRegime(**p),
+    }
     make = makers.get(payload["bot_key"])
     if make is None:
         raise SystemExit(f"no maker registered for bot_key {payload['bot_key']!r}")
@@ -128,12 +132,13 @@ def main(argv=None) -> int:
     p.add_argument("--db", default="sqlite:////Users/dawe/Developer/HedgeFund/backend/data/research.db")
     args = p.parse_args(argv)
 
-    if args.family != "F1":
-        raise SystemExit(f"unknown family {args.family!r}; declared families: F1")
+    from trading.candidates import GRIDS
 
-    from trading.candidates import trend_momentum_candidates
+    grid_fn = GRIDS.get(args.family)
+    if grid_fn is None:
+        raise SystemExit(f"unknown family {args.family!r}; declared families: {sorted(GRIDS)}")
 
-    candidates = trend_momentum_candidates()
+    candidates = grid_fn()
     if args.candidates:
         wanted = set(args.candidates.split(","))
         candidates = [c for c in candidates if c.name in wanted]

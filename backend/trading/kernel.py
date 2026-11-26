@@ -629,7 +629,13 @@ def _make_strategy_class():
             risk_amount = self._state.realized_net * self._cfg.risk_per_trade
             qty_raw = self._cfg.leverage * risk_amount / stop_dist
             instrument = self.cache.instrument(self.instrument_id)
-            qty = float(instrument.make_qty(qty_raw).as_decimal())
+            try:
+                qty = float(instrument.make_qty(qty_raw).as_decimal())
+            except ValueError:
+                # nautilus raises when rounding collapses the quantity to
+                # zero — that is the qty_zero outcome, not a crash: the
+                # vocabulary is closed and every entry answers in its words
+                qty = 0.0
             if qty <= 0:
                 return {"outcome": "qty_zero", "details": {"qty_raw": qty_raw, "risk_amount": risk_amount, "stop_dist": stop_dist}}
 

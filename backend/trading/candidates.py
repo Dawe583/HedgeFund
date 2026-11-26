@@ -354,3 +354,60 @@ def mlforecast_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
 
 
 GRIDS["F9"] = mlforecast_candidates
+
+
+# F10: alpha-zoo survivors — declared in program-2026-11-26 (budget 40)
+# bench citation: /tmp/alpha-bench-crypto-4h.json measured 2026-11-26
+F10_ALPHAS = [
+    ("gtja191_093", False),  # microstructure, alive ic +0.078
+    ("gtja191_159", True),   # momentum, reversed ic -0.081 — inverted because measured
+    ("gtja191_126", False),  # reversal, alive ic +0.078
+    ("gtja191_097", True),   # volatility, reversed ic -0.078
+    ("gtja191_081", True),   # volume, reversed ic -0.076
+]
+F10_ENTRY_Z = [1.5, 2.0]
+F10_UNIVERSE = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"]
+
+
+def alpha_survivor_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
+    """The F10 grid: 5 decorrelated survivors x 2 entry z-scores x 2 symbols.
+    exit_z fixed at 0.5 — the alpha collapse band is not the family's
+    question; the entries are. Inversion comes from the bench verdict,
+    never from intuition."""
+    import importlib
+
+    from trading.bots.alpha_signal_bot import AlphaSignal
+
+    out = []
+    for alpha_id, invert in F10_ALPHAS:
+        zoo, num = alpha_id.split("_")
+        mod = importlib.import_module(f"trading.factors.zoo.{zoo}.alpha_{num}")
+        compute_fn = mod.compute
+        for entry_z in F10_ENTRY_Z:
+            params = {"entry_z": entry_z, "exit_z": 0.5, "invert": invert}
+            name = f"asig-{alpha_id.split('_')[1]}{'i' if invert else ''}-e{entry_z}"
+            out.append(
+                Candidate(
+                    family="F10-alphasig",
+                    name=name,
+                    bot_key="alphasig",
+                    params={**params, "alpha": alpha_id},
+                    make=lambda p, _c=compute_fn: _make_alpha_signal(_c, p),
+                    symbols=list(symbols),
+                    timeframe="4h",
+                )
+            )
+    return out
+
+
+def _make_alpha_signal(compute_fn, params):
+    from trading.bots.alpha_signal_bot import AlphaSignal
+
+    bot = AlphaSignal(entry_z=params["entry_z"], exit_z=params["exit_z"], invert=params["invert"])
+    bot.alpha_compute = compute_fn
+    bot.alpha_symbols = list(F10_UNIVERSE)
+    bot.timeframe = "4h"
+    return bot
+
+
+GRIDS["F10"] = alpha_survivor_candidates

@@ -41,6 +41,7 @@ def evaluate_cell(payload: dict) -> dict:
     from trading.bots.xs_basket_bot import XSBasket
     from trading.bots.regime_continuation_bot import RegimeContinuation
     from trading.bots.ml_forecast_bot import MLForecast
+    from trading.bots.alpha_signal_bot import AlphaSignal
     from trading.search import Candidate, evaluate_candidate, in_sample, load_frame, open_ledger, out_of_sample, rails_off_config
 
     makers = {
@@ -56,7 +57,22 @@ def evaluate_cell(payload: dict) -> dict:
         "breakout": lambda p: BreakoutVol(**p),
         "meanrev": lambda p: MeanRev(**p),
     }
-    if payload["bot_key"] == "mlforecast":
+    if payload["bot_key"] == "alphasig":
+        import importlib as _il
+
+        alpha_id = payload["params"]["alpha"]
+        zoo, num = alpha_id.split("_")
+        compute_fn = _il.import_module(f"trading.factors.zoo.{zoo}.alpha_{num}").compute
+        from trading.candidates import F10_UNIVERSE
+
+        def make(p, _c=compute_fn):
+            bot = AlphaSignal(entry_z=p["entry_z"], exit_z=p["exit_z"], invert=p["invert"])
+            bot.alpha_compute = _c
+            bot.alpha_symbols = list(F10_UNIVERSE)
+            bot.alpha_research_db = payload["research_db"]
+            bot.timeframe = payload["timeframe"]
+            return bot
+    elif payload["bot_key"] == "mlforecast":
         from trading.ml_forecast import artifact_for
 
         art = artifact_for(payload["symbol"], payload["timeframe"], payload["research_db"])

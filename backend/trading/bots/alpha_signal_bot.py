@@ -74,6 +74,66 @@ class AlphaSignal(BaseStrategy):
             return None
 
 
+    alpha_compute = None      # class attribute: vendored compute fn, set per candidate
+    alpha_symbols = None      # universe the alpha is computed over
+    alpha_research_db = None  # data source — set by the candidate machinery
+
+    def inject_frame(self, df, symbol: str):
+        """Causal alpha injection for the per-symbol kernel path. Computes
+        the alpha over the whole universe ONCE per worker, takes this
+        symbol's column, z-scores it against expanding history (never
+        centered — verified causality at 0.0 violation), and joins
+        alpha_val/alpha_z onto the frame by timestamp."""
+        if self.alpha_compute is None or self.alpha_symbols is None:
+            return df
+        wide = _alpha_wide_cached(self.alpha_compute, self.alpha_research_db, self.alpha_symbols, self.timeframe)
+        if symbol not in wide.columns:
+            return df
+        z = align_alpha_series(wide, symbol)
+        # timezone honesty: the kernel's windowing localizes frames to UTC
+        # while the candle store and the alpha panel stay naive — align the
+        # injected series to the frame's own tz, whatever it is, rather
+        # than assuming either side
+        if df.index.tz is not None and z.index.tz is None:
+            z = z.copy()
+            z.index = z.index.tz_localize(df.index.tz)
+        elif df.index.tz is None and z.index.tz is not None:
+            z = z.copy()
+            z.index = z.index.tz_localize(None)
+        out = df.copy()
+        out = out.join(z, how="left")
+        return out
+
+
+def _alpha_wide_cached(compute_fn, research_db: str, symbols: list[str], timeframe: str):
+    """Compute-once-read-many alpha panel, cached as a pickle beside the
+    research data. Mutable module globals are banned by project rule; the
+    file cache is the honest equivalent — the panel is a deterministic
+    function of (alpha, universe, timeframe, candle data), invalidation is
+    deleting the file, and a stale cache is impossible in practice because
+    backtests run against fixed historical windows."""
+    import hashlib
+    import pickle
+    from pathlib import Path
+
+    key = hashlib.sha256(
+        (compute_fn.__module__ + "|".join(sorted(symbols)) + timeframe).encode()
+    ).hexdigest()[:12]
+    cache_dir = Path(research_db.replace("sqlite:///", "")).parent / "alpha_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"{compute_fn.__module__.split('.')[-1]}-{timeframe}-{key}.pkl"
+    if path.exists():
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
+    from trading.alpha_bench import load_panel
+
+    panel = load_panel(research_db, symbols, timeframe)
+    wide = compute_fn(panel)
+    with open(path, "wb") as fh:
+        pickle.dump(wide, fh)
+    return wide
+
+
 def compute_alpha_panel(compute_fn, research_db: str, symbols: list[str], timeframe: str) -> "object":
     """Run one vendored alpha over the universe and return the wide frame —
     the input to per-symbol injection. Cross-sectional ranks inside the

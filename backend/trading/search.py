@@ -223,6 +223,16 @@ def evaluate_candidate(
 
     started = time.monotonic()
     instance = candidate.instance()
+    # cross-sectional injection hook (F10, 2026-11-26): same contract as the
+    # basket path — the instance may reshape the frame causally before
+    # validation. `df` here is the FULL frame (phase slicing happens inside
+    # validate_core), so alpha warm-up reaches back through in-sample
+    # history even in phase B — legitimate causal use, never lookahead:
+    # alpha values at bar t depend only on bars <= t by the zoo's own
+    # operator discipline.
+    injector = getattr(instance, "inject_frame", None)
+    if callable(injector):
+        df = injector(df, symbol)
     core = validate_core(
         instance,
         candidate.bot_key,

@@ -103,3 +103,28 @@ a shape closer to long partitions or repeated short ones than to a single
 70s hole. A long-blackhole probe (5-10 min, crossing the heartbeat timeout)
 is the next measurement; the probe harness now supports it with one flag,
 and the watchdog is production coverage for every shape in the meantime.
+
+## Long-blackhole probe — 6-minute partitions, measured the same night
+
+The short-hole run left the key question open: does crossing the server's
+ping cadence change anything? Three cycles of 360s blackhole partitions
+against the live production twin:
+
+| cycle | partition | verdict | recovery after open |
+|---|---|---|---|
+| 0 | 360s | RESUMED | 60.1s |
+| 1 | 360s | RESUMED | 60.1s |
+| 2 | 360s | RESUMED | 58.2s |
+
+**3/3 RESUMED, zero deaths at six-minute holes.** The Rust client's own
+liveness machinery either tolerates the gap or reconnects cleanly enough
+that the stream resumes within a minute of partition end — in both cases
+without operator intervention. The production failure shape (hours of
+silence behind healthy-looking reconnects) is therefore NOT reproduced by
+clean blackholes of any tested length: whatever killed the soak's 4h tape
+is a different shape — partial connectivity (some flows passing, some
+dropped), server-side session rot, or machine sleep — and the watchdog
+remains the correct symptomatic cover exactly because the reproduction
+remains open. The probe harness now supports arbitrary partition lengths
+with positional args; the next shape to try is a partial blackhole
+(klines-only filter) when the vendor question becomes load-bearing again.

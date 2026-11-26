@@ -282,3 +282,39 @@ def volbreakout_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
 
 
 GRIDS["F4"] = volbreakout_candidates
+
+
+# F8 — regime-aware continuation. Budget 20, exact fit:
+# regime_min x regime_lookback x entry_dev = 2x2x2 = 8 x 2 symbols = 16.
+# Declared BEFORE the first sweep (program-2026-11-26): the gate is the
+# hypothesis, tested on the same in-sample window where F7 unfiltered
+# measured +1.92 — the comparison is the measurement.
+F8_REGIME_MINS = (0.2, 0.4)      # ER floor: permissive / strict trend evidence
+F8_REGIME_LOOKBACKS = (16, 36)   # fast windows: hours-to-day-and-half at 1h
+F8_ENTRY_DEVS = (1.5, 2.0)
+
+
+def regime_continuation_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
+    from trading.bots.regime_continuation_bot import RegimeContinuation
+
+    out: list[Candidate] = []
+    for rmin in F8_REGIME_MINS:
+        for rlook in F8_REGIME_LOOKBACKS:
+            for edev in F8_ENTRY_DEVS:
+                params = {"dev_lookback": 24, "entry_dev": edev, "exit_dev": 0.3,
+                          "stop_atr": 3.0, "tp_rr": 2.0,
+                          "regime_lookback": rlook, "regime_min": rmin}
+                name = f"regcont-m{int(rmin*10)}-r{rlook}-e{edev}"
+                out.append(Candidate(
+                    family="F8-regime-cont",
+                    name=name,
+                    bot_key="regimecont",
+                    params=params,
+                    make=lambda p: RegimeContinuation(**p),
+                    symbols=list(symbols),
+                    timeframe="1h",
+                ))
+    return out
+
+
+GRIDS["F8"] = regime_continuation_candidates

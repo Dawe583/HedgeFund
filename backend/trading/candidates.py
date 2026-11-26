@@ -245,3 +245,40 @@ def xs_basket_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
 
 
 GRIDS["F3"] = xs_basket_candidates
+
+
+# F4 — volatility-scaled breakout, wide stops, longer holds. The catalog's
+# BreakoutVol re-parameterized: production ran 5m/1.5 ATR/96-bar holds and
+# died on 365d; the family hypothesis is that the breakout mechanism lives
+# at position scale — 4h bars, 3-5 ATR stops, multi-week holds — where the
+# kernel's risk sizing already scales quantity by stop distance, so wider
+# stops ARE volatility-scaled sizing. Budget 20: 2x2x2 x 2 symbols = 16.
+F4_LOOKBACKS = (20, 55)      # Donchian channel: 3.3d / 9.2d at 4h
+F4_STOP_ATR = (3.0, 5.0)     # wide — production's 1.5 is what failed
+F4_TP_RR = (2.5, 4.0)
+
+
+def volbreakout_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
+    from trading.bots.breakout_bot import BreakoutVol
+
+    out: list[Candidate] = []
+    for lookback in F4_LOOKBACKS:
+        for stop in F4_STOP_ATR:
+            for tp in F4_TP_RR:
+                params = {"lookback": lookback, "vol_z_min": 0.5,
+                          "body_min_pct": 0.01, "body_atr_mult": 0.25,
+                          "stop_atr": stop, "tp_rr": tp, "max_bars_in_trade": 480}
+                name = f"volbreak-l{lookback}-s{stop}-t{tp}"
+                out.append(Candidate(
+                    family="F4-volbreakout",
+                    name=name,
+                    bot_key="breakout",
+                    params=params,
+                    make=lambda p: BreakoutVol(**p),
+                    symbols=list(symbols),
+                    timeframe="4h",
+                ))
+    return out
+
+
+GRIDS["F4"] = volbreakout_candidates

@@ -12,7 +12,8 @@
 data.db
 *.db-shm
 *.db-wal
-backend/data/
+backend/data/*
+!backend/data/ledger_snapshot.json
 
 # ===== Python / backend (virtualenv uv & cache) =====
 .venv/

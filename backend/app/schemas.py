@@ -3406,3 +3406,127 @@ ChatEvent = Annotated[
     | ChatError,
     Field(discriminator="kind"),
 ]
+
+
+# --- Fund overview (the wealth/trading consolidation, design §8 / D13) ------
+
+
+class OverviewTradingEquity(BaseModel):
+    """What the trading engine last said the desk is worth, engine-reported.
+
+    `available` false is a first-class answer — an engine that never ran has
+    no equity to report, and that is a fact about the desk, not an error. The
+    figure never enters the net worth: the broker statement already contains
+    the money, so summing both would count it twice (design D13)."""
+
+    model_config = API_OUT
+
+    available: bool = Field(
+        description=(
+            "False when the engine has written no equity row — never run, or "
+            "the equity table does not exist in this database. An honest "
+            "state, not an error."
+        ),
+    )
+    value: float | None = Field(
+        default=None,
+        description="The latest portfolio equity the engine wrote, in `currency`",
+    )
+    value_base: float | None = Field(
+        default=None,
+        description=(
+            "The same equity in the base currency, when a rate converts it; "
+            "None when none does. Never a pass-through: a dollar figure is "
+            "not a euro figure."
+        ),
+    )
+    currency: str = Field(
+        default="USD",
+        description="The engine's own unit: paper desks trade dollar-quoted pairs",
+    )
+    as_of: str | None = Field(
+        default=None,
+        description="Timestamp of the latest engine equity row (UTC)",
+    )
+    source: str = Field(
+        default="equity_points",
+        description="The table the figure is read from — provenance, not decoration",
+    )
+
+
+class OverviewReconciliation(BaseModel):
+    """Ledger statement vs engine equity for the mapped trading account.
+
+    The statement side is the ledger's own reading of the account: projected
+    positions at market plus projected cash, the same arithmetic that feeds
+    net worth, plus the date of the last photograph/balance for provenance.
+    The gap is statement minus engine in the base, and it is None whenever
+    either side cannot be measured in it — a gap computed on a dollar figure
+    read as euro would be the wrong answer presented as the right one.
+
+    `missing` is the list of what stands between the reader and a gap, as
+    codes, in the order they would be resolved:
+    - `no-mapping` — no institution is declared as the trading account;
+    - `institution-gone` — the declared institution was deleted;
+    - `no-statement` — the account has no situation and no balance yet;
+    - `no-engine-equity` — the engine never wrote an equity row;
+    - `equity-unconvertible` — no rate converts the engine's dollars into the base.
+    An empty list means the gap is the figure it carries."""
+
+    model_config = API_OUT
+
+    institution_id: int | None = None
+    institution_name: str | None = None
+    statement_positions: float | None = Field(
+        default=None, description="Projected investment positions of the account, in the base"
+    )
+    statement_cash: float | None = Field(
+        default=None, description="Projected cash of the account, in the base; None without a balance"
+    )
+    statement_total: float | None = Field(
+        default=None,
+        description="Positions + cash in the base. None when the account has no statement at all.",
+    )
+    statement_date: str | None = Field(
+        default=None,
+        description=(
+            "The latest photograph or balance date behind the statement side — "
+            "how fresh the photograph half of the comparison is"
+        ),
+    )
+    engine_equity_base: float | None = Field(
+        default=None, description="The engine's equity converted into the base"
+    )
+    engine_as_of: str | None = Field(
+        default=None, description="Timestamp of the engine row the gap is measured against"
+    )
+    gap: float | None = Field(
+        default=None,
+        description="statement_total − engine equity, in the base. Signed: positive means the ledger reads more than the engine.",
+    )
+    missing: list[str] = Field(
+        default_factory=list,
+        description="What is missing for a gap to exist, as codes; empty means measured",
+    )
+
+
+class OverviewFund(BaseModel):
+    """The consolidated fund overview (design §8): ledger wealth beside the
+    engine's own figure, and the reconciliation between the two statements
+    about the same money.
+
+    The consolidated total is LEDGER wealth — the trading account is already
+    inside it through the broker statement — with the engine's equity never
+    summed in."""
+
+    model_config = API_OUT
+
+    total_wealth: DashboardSummary
+    trading_equity: OverviewTradingEquity
+    reconciliation: OverviewReconciliation
+
+
+class TradingAccountMapping(BaseModel):
+    """Which ledger institution is the trading desk's account (input)."""
+
+    institution_id: int = Field(..., ge=1, description="The institution the engine trades out of")

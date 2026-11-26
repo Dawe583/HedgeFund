@@ -22,6 +22,7 @@ import { EmptyState } from "./Emblem";
 import { IN_FORCE, notCounted, undatedLine } from "./inForce";
 import { OmissionsNotice } from "./OmissionsNotice";
 import { UnconvertedNotice } from "./UnconvertedNotice";
+import FundOverview from "./FundOverview";
 import { Explainer, SAVINGS_RATE, StatCard, apiError, cardClass, locale, money, statLabelClass } from "./ui";
 import type { Money } from "./money";
 
@@ -434,6 +435,13 @@ export default function Dashboard() {
           />
         </div>
       </section>
+
+      {/* The trading desk beside the ledger, never summed into the figure
+          above: the engine's own equity and the reconciliation between the
+          broker statement and the engine, each honestly absent when it
+          cannot be measured (design §8 / D13). Fetched on its own, so a
+          backend that cannot answer it never blanks the wealth figures. */}
+      <FundOverview />
 
 
       {/* Right under the figure it qualifies: net worth is smaller than it was

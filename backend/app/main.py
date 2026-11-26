@@ -30,6 +30,7 @@ from app.routers import (
     income_sources,
     institutions,
     liabilities,
+    overview,
     prices,
     real_assets,
     settings,
@@ -115,6 +116,7 @@ app.include_router(chain.router)
 app.include_router(chat.router)
 app.include_router(watchlist.router)
 app.include_router(trading.router)
+app.include_router(overview.router)
 
 
 @app.get("/api/health")

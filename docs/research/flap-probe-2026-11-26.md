@@ -77,3 +77,29 @@ once — the first time the watchdog fires in production.
   repo-root scripts — the venv has no installed trading package, pytest's
   pythonpath setting does not apply to bare python. First launch attempt
   died on exactly this; the relaunch line is in the script's docstring.
+
+## Blackhole probe — measured the same evening (2026-11-26)
+
+The probe gained a blackhole mode: the relay keeps every socket open but
+swallows all bytes — the failure shape the production 4h candle silence most
+resembles. Four cycles of 70s partitions against a live production twin:
+
+| cycle | partition | verdict | recovery after open |
+|---|---|---|---|
+| 0 | 70s blackhole | RESUMED | 52.2s |
+| 1 | 70s blackhole | RESUMED | 46.2s |
+| 2 | 70s blackhole | RESUMED | 52.2s |
+| 3 | 70s blackhole | RESUMED | 50.1s |
+
+**4/4 RESUMED, zero deaths** — the controller survives short blackholes
+without any reconnect at all: TCP is silent-but-open, no FIN arrives, the
+socket is still valid when bytes return, and the stream resumes in place.
+The 46-52s "recovery" is the bar-close cadence catching up, not a failure.
+
+What this does NOT answer, and why: 70s is shorter than the server's ping
+cadence (minutes), so the heartbeat path never engaged. The production
+failure was hours of silence with repeated reconnects and bulk backfills —
+a shape closer to long partitions or repeated short ones than to a single
+70s hole. A long-blackhole probe (5-10 min, crossing the heartbeat timeout)
+is the next measurement; the probe harness now supports it with one flag,
+and the watchdog is production coverage for every shape in the meantime.

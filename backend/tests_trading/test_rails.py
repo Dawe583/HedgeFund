@@ -361,6 +361,9 @@ def test_desk_boots_empty_roster(session_factory):
         desk.node.stop()
     except Exception:
         pass
+    # the desk was never run — no loop, no timers: stop suffices, nothing to drain.
+    # (dispose() races a never-started kernel; the zombie-kernel hazard of
+    # test_desk._stop_node applies only to nodes that ran)
 
 
 # ------------------------------------------------------------ api endpoint

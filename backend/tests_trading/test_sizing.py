@@ -237,6 +237,11 @@ def _two_bot_desk(session_factory, cfg_a, cfg_b):
         desk.node.stop()
     except Exception:
         pass
+    time.sleep(1)  # stop() is async on the kernel loop — dispose must not race it
+    try:
+        desk.node.dispose()
+    except Exception:
+        pass
     return desk
 
 

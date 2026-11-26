@@ -224,6 +224,31 @@ def cmd_ingest_funding(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ingest_ccxt(args: argparse.Namespace) -> int:
+    """Multi-venue crypto ingestion through ccxt. Symbols arrive in ccxt's
+    unified format and are stored SANITIZED (BTC/USDT:USDT -> BTCUSDT) so
+    the candle store keeps one naming convention across venues; the venue
+    tag records where the tape actually came from."""
+    import asyncio
+
+    from trading.feeds.ccxt_feed import fetch_ccxt_candles
+
+    async def _run():
+        rows, venue = await fetch_ccxt_candles(symbol=args.symbol, interval=args.timeframe, days=args.days, venue=args.venue)
+        engine = make_engine(args.db)
+        init_schema(engine)
+        sf = make_session_factory(engine)
+        canonical = args.symbol.replace("/", "").split(":")[0].upper()
+        with sf() as session:
+            inserted = upsert_candles(session, canonical, args.timeframe, rows)
+        engine.dispose()
+        return inserted, venue, canonical
+
+    inserted, venue, canonical = asyncio.run(_run())
+    print(json.dumps({"ingested": inserted, "venue": venue, "symbol": canonical, "timeframe": args.timeframe, "days": args.days, "db": args.db}))
+    return 0
+
+
 def cmd_ingest_yahoo(args: argparse.Namespace) -> int:
     """Multi-asset ingestion through Yahoo Finance — stocks, indexes, metals."""
     from trading.feeds.yahoo import fetch_yahoo_candles
@@ -724,6 +749,14 @@ def main(argv: list[str] | None = None) -> int:
     p_yf.add_argument("--days", type=int, default=729)
     p_yf.add_argument("--db", default=DEFAULT_RESEARCH_DB)
     p_yf.set_defaults(fn=cmd_ingest_yahoo)
+
+    p_cx = sub.add_parser("ingest-ccxt", help="multi-venue crypto ingestion through ccxt")
+    p_cx.add_argument("--symbol", required=True, help="ccxt unified symbol, e.g. BTC/USDT:USDT")
+    p_cx.add_argument("--venue", default="binanceusdm")
+    p_cx.add_argument("--timeframe", default="1h")
+    p_cx.add_argument("--days", type=int, default=365)
+    p_cx.add_argument("--db", default=DEFAULT_RESEARCH_DB)
+    p_cx.set_defaults(fn=cmd_ingest_ccxt)
 
     p_pred = sub.add_parser("predict", help="forward-return prediction for one symbol (F9 artifact)")
     p_pred.add_argument("--symbol", required=True)

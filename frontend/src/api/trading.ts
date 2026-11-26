@@ -140,3 +140,16 @@ export async function getTradingRails(): Promise<TradingRailsStatus> {
 export async function getRecentTrades(): Promise<TradingClosedTrade[]> {
   return (await api.get<TradingClosedTrade[]>("/api/trading/positions/recent-trades")).data;
 }
+
+/** The slice-5 divergence surface: per bot, the declared drift budget, the
+    feed counters the live process measures, the aggregated per-fill drift
+    evidence, and the distributional paper-vs-backtest comparison — null
+    with an explanatory note whenever the data volume is below the same
+    statistical bar the validation gate sets (30 trades per side). Never
+    fake statistics over two trades. */
+export type TradingDivergenceStatus = Schemas["TradingDivergenceStatus"];
+export type TradingBotDivergence = Schemas["TradingBotDivergence"];
+
+export async function getTradingDivergence(): Promise<TradingDivergenceStatus> {
+  return (await api.get<TradingDivergenceStatus>("/api/trading/divergence")).data;
+}

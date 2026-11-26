@@ -49,9 +49,13 @@ class DeskLedger:
         self._interval_ns = interval_ns
 
     def fill_time(self, ts_event_ns: int) -> dt.datetime:
-        # kernel fills are stamped at the CLOSE of the filling bar; the
-        # bar-open key is the frame's indexing convention everywhere else
-        return _utc_from_ns(ts_event_ns - self._interval_ns)
+        # kernel fills are stamped at the CLOSE of the filling bar (plus
+        # chain latency on a live clock — measured ~200ms in the smoke). The
+        # bar-open key is the frame's indexing convention everywhere else:
+        # floor(ts - interval) lands on the open for both the exact close
+        # stamp and the few-hundred-ms-late live one, where plain subtraction
+        # would key the row mid-bar.
+        return _utc_from_ns((ts_event_ns - self._interval_ns) // self._interval_ns * self._interval_ns)
 
     def entry_opened(self, bot: str, spec: dict, pos: dict) -> int:
         """INSERT the open position the moment its entry fills. Returns the
@@ -71,6 +75,11 @@ class DeskLedger:
                 signal_time=pos.get("signal_time"),
                 confidence=pos["confidence"],
                 gate_source="kernel",
+                # entry divergence evidence, measured in the node's hook where
+                # the frame and the instrument tick size live; None stays None
+                entry_dev_ticks=pos.get("entry_dev_ticks"),
+                entry_ref_price=pos.get("entry_ref_price"),
+                entry_lag_bars=pos.get("entry_lag_bars"),
             )
             session.add(row)
             session.commit()
@@ -86,6 +95,19 @@ class DeskLedger:
         exit_ = pos["exit_fill"]
         session = self._sf()
         try:
+            # a rearmed position's entry drift evidence never survives the
+            # restart into the kernel's pos dict — it lives on the open row
+            # this transaction is about to delete. Recover it there, in the
+            # same transaction, instead of dropping the original entry's
+            # measurement: the trade row is the audit surface.
+            entry_dev = pos.get("entry_dev_ticks")
+            entry_lag = pos.get("entry_lag_bars")
+            row_id = pos.get("ledger_row_id")
+            if entry_dev is None and row_id is not None:
+                open_row = session.get(OpenPosition, row_id)
+                if open_row is not None:
+                    entry_dev = open_row.entry_dev_ticks
+                    entry_lag = open_row.entry_lag_bars
             trade = Trade(
                 bot=bot,
                 symbol=spec["symbol"],
@@ -100,9 +122,11 @@ class DeskLedger:
                 confidence=pos["confidence"],
                 mode="paper",
                 gate_source="kernel",
+                entry_dev_ticks=entry_dev,
+                exit_dev_ticks=pos.get("exit_dev_ticks"),
+                entry_lag_bars=entry_lag,
             )
             session.add(trade)
-            row_id = pos.get("ledger_row_id")
             if row_id is not None:
                 session.execute(delete(OpenPosition).where(OpenPosition.id == row_id))
             session.commit()

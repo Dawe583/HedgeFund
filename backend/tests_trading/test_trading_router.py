@@ -279,11 +279,15 @@ POSITION_KEYS = {
     "id", "bot", "symbol", "side", "qty", "entry_price", "stop_loss",
     "take_profit", "opened_at", "age_seconds", "confidence", "signal_time",
     "gate_source",
+    # slice 5: per-fill divergence evidence, nullable
+    "entry_dev_ticks", "entry_ref_price", "entry_lag_bars",
 }
 CLOSED_TRADE_KEYS = {
     "id", "bot", "symbol", "side", "qty", "entry_price", "exit_price",
     "entry_time", "exit_time", "pnl", "fees", "confidence", "mode",
     "gate_source",
+    # slice 5: per-fill divergence evidence, nullable
+    "entry_dev_ticks", "exit_dev_ticks", "entry_lag_bars",
 }
 
 

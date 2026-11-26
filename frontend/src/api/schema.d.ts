@@ -1527,6 +1527,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trading/divergence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trading Divergence
+         * @description The slice-5 divergence surface: per bot, the declared budget, the live
+         *     feed counters, the aggregated per-fill drift evidence, and the paper-vs-
+         *     backtest distributional comparison when the data volume makes it
+         *     meaningful (n≥30 on BOTH sides — the validation gate's own statistical
+         *     bar; smaller samples are reported as insufficient, never as fake
+         *     statistics).
+         *
+         *     Sources, honestly separated: budgets and feed counters come from the
+         *     desk runner's rail snapshots (kernel memory is the truth, the snapshot
+         *     its rendering), per-fill evidence aggregates the trade rows the desk
+         *     wrote at fill time. Bots present in neither surface simply do not
+         *     appear — an engine that never ran has no divergence to measure, and
+         *     empty is the first-class answer.
+         */
+        get: operations["trading_divergence_api_trading_divergence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trading/positions": {
         parameters: {
             query?: never;
@@ -5466,6 +5498,32 @@ export interface components {
             known_countries: components["schemas"]["TaxCountryDefault"][];
         };
         /**
+         * TradingBotDivergence
+         * @description One bot's divergence picture: the declared budget, the live feed
+         *     counters, the aggregated per-fill evidence, and the distributional
+         *     comparison when — and only when — the data volume makes it meaningful.
+         */
+        TradingBotDivergence: {
+            /** Backfilled Bars */
+            backfilled_bars: number | null;
+            /** Bot */
+            bot: string;
+            /** Budget Dev Ticks */
+            budget_dev_ticks: number | null;
+            /** Budget Entry Lag Bars */
+            budget_entry_lag_bars: number | null;
+            /** Budget Missed Bars */
+            budget_missed_bars: number | null;
+            distribution: components["schemas"]["TradingDivergenceDistribution"] | null;
+            /** Distribution Note */
+            distribution_note: string;
+            fills: components["schemas"]["TradingDivergenceFillStats"];
+            /** Missed Bars */
+            missed_bars: number | null;
+            /** Open Positions */
+            open_positions: components["schemas"]["TradingPosition"][];
+        };
+        /**
          * TradingBotRails
          * @description One bot's rail state as the desk's snapshot last wrote it — every
          *     number the rails themselves computed, plus the exposure book's slice.
@@ -5487,6 +5545,7 @@ export interface components {
             daily_loss_consumed: number;
             /** Daily Loss Limit */
             daily_loss_limit: number;
+            divergence?: components["schemas"]["TradingRailDivergence"] | null;
             /** Drawdown Pct */
             drawdown_pct: number;
             /** Equity */
@@ -5514,6 +5573,10 @@ export interface components {
             bot: string;
             /** Confidence */
             confidence: number;
+            /** Entry Dev Ticks */
+            entry_dev_ticks: number | null;
+            /** Entry Lag Bars */
+            entry_lag_bars: number | null;
             /** Entry Price */
             entry_price: number;
             /**
@@ -5521,6 +5584,8 @@ export interface components {
              * Format: date-time
              */
             entry_time: string;
+            /** Exit Dev Ticks */
+            exit_dev_ticks: number | null;
             /** Exit Price */
             exit_price: number;
             /**
@@ -5544,6 +5609,61 @@ export interface components {
             side: string;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * TradingDivergenceDistribution
+         * @description Paper-vs-backtest per-trade pnl positioning — present ONLY when both
+         *     sides have ≥30 trades (the same statistical bar the validation gate
+         *     sets). Descriptive, never inferential: no p-values over small
+         *     autocorrelated samples.
+         */
+        TradingDivergenceDistribution: {
+            /** Bt Mean Pnl */
+            bt_mean_pnl: number;
+            /** Bt Median Pnl */
+            bt_median_pnl: number;
+            /** Bt P5 */
+            bt_p5: number;
+            /** Bt P95 */
+            bt_p95: number;
+            /** Bt Trades */
+            bt_trades: number;
+            /** Paper Mean Pnl */
+            paper_mean_pnl: number;
+            /** Paper Mean Within Bt P5 P95 */
+            paper_mean_within_bt_p5_p95: boolean;
+            /** Paper Trades */
+            paper_trades: number;
+        };
+        /**
+         * TradingDivergenceFillStats
+         * @description Per-fill drift evidence aggregated over the bot's closed trades —
+         *     the mechanical divergence measurement, meaningful at n=1 because each
+         *     fill is one kernel fact compared against its own bar.
+         */
+        TradingDivergenceFillStats: {
+            /** Breaches */
+            breaches: number;
+            /** Max Abs Dev Ticks */
+            max_abs_dev_ticks: number | null;
+            /** Max Entry Lag Bars */
+            max_entry_lag_bars: number | null;
+            /** Mean Abs Dev Ticks */
+            mean_abs_dev_ticks: number | null;
+            /** Measured Fills */
+            measured_fills: number;
+        };
+        /**
+         * TradingDivergenceStatus
+         * @description /api/trading/divergence — the slice-5 surface. Bots come from two
+         *     sources unioned: the rail snapshots (live processes) and the trade
+         *     rows (evidence). Empty bots is the honest first-class answer.
+         */
+        TradingDivergenceStatus: {
+            /** Bots */
+            bots: components["schemas"]["TradingBotDivergence"][];
+            /** Breach Events */
+            breach_events: components["schemas"]["TradingRiskEvent"][];
         };
         /** TradingEquityPoint */
         TradingEquityPoint: {
@@ -5570,8 +5690,14 @@ export interface components {
             bot: string;
             /** Confidence */
             confidence: number;
+            /** Entry Dev Ticks */
+            entry_dev_ticks: number | null;
+            /** Entry Lag Bars */
+            entry_lag_bars: number | null;
             /** Entry Price */
             entry_price: number;
+            /** Entry Ref Price */
+            entry_ref_price: number | null;
             /** Gate Source */
             gate_source: string;
             /** Id */
@@ -5607,6 +5733,24 @@ export interface components {
             /** Seed */
             seed: number;
         };
+        /**
+         * TradingRailDivergence
+         * @description The divergence budget as the version declared it, plus the feed
+         *     counters the live process measures against it. None on the wire means
+         *     the snapshot predates slice 5 — never zeros, because zero is a claim.
+         */
+        TradingRailDivergence: {
+            /** Backfilled Bars */
+            backfilled_bars: number;
+            /** Budget Dev Ticks */
+            budget_dev_ticks: number;
+            /** Budget Entry Lag Bars */
+            budget_entry_lag_bars: number;
+            /** Budget Missed Bars */
+            budget_missed_bars: number;
+            /** Missed Bars */
+            missed_bars: number;
+        };
         /** TradingRailExposure */
         TradingRailExposure: {
             /** Gross Cap */
@@ -5638,6 +5782,8 @@ export interface components {
             manual_killswitch_note: string;
             /** Recent Events */
             recent_events: components["schemas"]["TradingRiskEvent"][];
+            /** Vetoes Today */
+            vetoes_today: components["schemas"]["TradingRiskEvent"][];
         };
         /** TradingRiskEvent */
         TradingRiskEvent: {
@@ -9303,6 +9449,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trading_divergence_api_trading_divergence_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingDivergenceStatus"];
                 };
             };
         };

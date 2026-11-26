@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import {
   getBacktestRun,
   getBacktestRuns,
+  getTradingDivergence,
   getRecentTrades,
   getTradingPositions,
   getTradingRails,
@@ -10,6 +11,7 @@ import {
   type BacktestRun,
   type BacktestRunDetail,
   type RunMetrics,
+  type TradingDivergenceStatus,
   type RunProvenance,
   type TradingClosedTrade,
   type TradingPosition,
@@ -23,14 +25,17 @@ import { fromApiCurve } from "../viz/equityData";
 import { EmptyState } from "./Emblem";
 import { apiError, cardClass, Section, statLabelClass } from "./ui";
 import {
+  divergenceBudgetsOf,
   engineReading,
   engineTone,
   fmtCi,
   fmtFolds,
   fmtP,
+  fmtTicks,
   runsNewestFirst,
   verdictBadge,
   type BadgeTone,
+  type DivergenceBudgets,
 } from "./tradingStatus";
 
 /* TRADING — the trading plane's page, structured as the design's information
@@ -527,9 +532,11 @@ function fmtClock(iso: string): string {
 export function PositionsBlotter({
   positions,
   fetchedAt,
+  budgets,
 }: {
   positions: TradingPosition[];
   fetchedAt: number;
+  budgets?: DivergenceBudgets;
 }) {
   const tick = useTick(1000);
   void tick; // the tick's only job is to re-render; the clock is Date.now()
@@ -546,6 +553,7 @@ export function PositionsBlotter({
             <th className="px-3 py-1.5 text-right font-medium">Entry</th>
             <th className="px-3 py-1.5 text-right font-medium">Stop</th>
             <th className="px-3 py-1.5 text-right font-medium">Target</th>
+            <th className="px-3 py-1.5 text-right font-medium">Dev</th>
             <th className="px-3 py-1.5 text-right font-medium">Age</th>
             <th className="px-3 py-1.5 text-right font-medium">Conf</th>
           </tr>
@@ -559,6 +567,24 @@ export function PositionsBlotter({
                 ? ` · signal bar ${new Date(p.signal_time).toLocaleString()}`
                 : " · signal time not recorded — row predates the kernel migration") +
               ` · written by ${p.gate_source}`;
+            // slice-5 divergence evidence: the entry fill's deviation in
+            // ticks from the filling bar's close. Colored ONLY when the
+            // bot's declared budget says so — a reading inside budget is
+            // mono ink because parity holding is the normal state, not a
+            // badge. Unmeasured reads as a dash, never a zero.
+            const budget = budgets?.get(p.bot);
+            const dev = p.entry_dev_ticks;
+            const breaching = dev !== null && dev !== undefined && budget !== undefined && Math.abs(dev) > budget;
+            const devTitle =
+              dev === null || dev === undefined
+                ? "entry drift unmeasured — the row predates slice 5 or the reference bar was unknowable"
+                : `entry fill ${fmtTicks(dev)} ticks from the filling bar's close` +
+                  (p.entry_ref_price ? ` (reference ${p.entry_ref_price})` : "") +
+                  (p.entry_lag_bars !== null && p.entry_lag_bars !== undefined
+                    ? ` · timing lag ${p.entry_lag_bars} bar${p.entry_lag_bars === 1 ? "" : "s"}`
+                    : "") +
+                  (budget !== undefined ? ` · budget ±${budget} ticks` : "") +
+                  (breaching ? " — BREACHING THE DECLARED BUDGET" : "");
             return (
               <tr
                 key={p.id}
@@ -577,6 +603,15 @@ export function PositionsBlotter({
                 <td className="px-3 py-1 text-right tabular-nums text-ink">{p.entry_price}</td>
                 <td className="px-3 py-1 text-right tabular-nums text-down">{p.stop_loss}</td>
                 <td className="px-3 py-1 text-right tabular-nums text-up">{p.take_profit}</td>
+                <td
+                  className={
+                    "px-3 py-1 text-right tabular-nums font-mono " +
+                    (breaching ? "font-medium text-down" : dev === null || dev === undefined ? "text-ink-faint" : "text-ink-soft")
+                  }
+                  title={devTitle}
+                >
+                  {fmtTicks(dev)}
+                </td>
                 <td className="px-3 py-1 text-right tabular-nums text-ink" title={provenance}>
                   {fmtAge(p.age_seconds + elapsed)}
                 </td>
@@ -597,7 +632,7 @@ export const PositionsBlotterForTest = PositionsBlotter;
 /* The recent-trades strip: settled round-trips as evidence the desk actually
    traded. Dense one-line rows, pnl signed and coloured — a loss reads red
    because it IS red, never because the palette needed variety. */
-function RecentTradesStrip({ trades }: { trades: TradingClosedTrade[] }) {
+function RecentTradesStrip({ trades, budgets }: { trades: TradingClosedTrade[]; budgets?: DivergenceBudgets }) {
   if (trades.length === 0) return null;
   return (
     <div className="mt-3">
@@ -607,6 +642,27 @@ function RecentTradesStrip({ trades }: { trades: TradingClosedTrade[] }) {
           <tbody>
             {trades.map((t) => {
               const won = t.pnl >= 0;
+              // entry/exit drift in ticks, compact — the trade's execution
+              // evidence beside its economics. Colored only when breaching
+              // the bot's declared budget; unmeasured reads as a dash.
+              const budget = budgets?.get(t.bot);
+              const devs: { v: number | null | undefined; kind: string }[] = [
+                { v: t.entry_dev_ticks, kind: "entry" },
+                { v: t.exit_dev_ticks, kind: "exit" },
+              ];
+              const worst = devs.reduce<number | null>((acc, d) => {
+                if (d.v === null || d.v === undefined) return acc;
+                return acc === null || Math.abs(d.v) > Math.abs(acc) ? d.v : acc;
+              }, null);
+              const breaching =
+                worst !== null && budget !== undefined && Math.abs(worst) > budget;
+              const devTitle = devs
+                .map((d) =>
+                  d.v === null || d.v === undefined
+                    ? `${d.kind} unmeasured`
+                    : `${d.kind} ${fmtTicks(d.v)} ticks`,
+                )
+                .join(" · ") + (budget !== undefined ? ` · budget ±${budget}` : "") + (breaching ? " — BREACHING" : "");
               return (
                 <tr key={t.id} className="border-b border-hair last:border-b-0">
                   <td className="px-3 py-1 text-ink-soft">{fmtClock(t.exit_time)}</td>
@@ -623,6 +679,15 @@ function RecentTradesStrip({ trades }: { trades: TradingClosedTrade[] }) {
                       {won ? "+" : ""}
                       {t.pnl.toFixed(2)}
                     </span>
+                  </td>
+                  <td
+                    className={
+                      "px-3 py-1 text-right tabular-nums font-mono " +
+                      (breaching ? "font-medium text-down" : "text-ink-faint")
+                    }
+                    title={devTitle}
+                  >
+                    {worst === null ? "—" : fmtTicks(worst)}
                   </td>
                   <td className="px-3 py-1 text-ink-faint">{t.mode}</td>
                 </tr>
@@ -783,11 +848,178 @@ export function RailsStrip({ rails }: { rails: TradingRailsStatus }) {
           </div>
         </div>
       )}
+      {/* today's veto tape (slice 5): every entry the caps or rails refused
+          since UTC midnight, densest-first. A day without vetoes is a day
+          the rails were never tested — which is information too, so the
+          strip says it rather than disappearing. */}
+      <div className="mt-2">
+        <h4 className={statLabelClass}>Today&apos;s vetoes</h4>
+        {rails.vetoes_today.length === 0 ? (
+          <p className="mt-1 font-mono text-[0.7rem] text-ink-faint">
+            none — the rails were never tested today
+          </p>
+        ) : (
+          <div className="mt-1 space-y-0.5 font-mono text-[0.7rem] text-ink-soft">
+            {rails.vetoes_today.slice(0, 12).map((e) => {
+              const reason =
+                typeof e.inputs?.reason === "string"
+                  ? e.inputs.reason
+                  : typeof e.inputs?.detail === "string"
+                    ? e.inputs.detail
+                    : "";
+              return (
+                <div key={e.id} className="flex flex-wrap gap-x-3" title={JSON.stringify(e.inputs)}>
+                  <span className="text-ink-faint">{e.created_at ? fmtClock(e.created_at) : "—"}</span>
+                  <span className="text-ink">{e.bot}</span>
+                  <span className="text-warn">{e.rail}</span>
+                  {e.symbol && <span className="text-ink-faint">{e.symbol}</span>}
+                  {reason && <span className="text-ink-soft">{reason}</span>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 export const RailsStripForTest = RailsStrip;
+
+/* ---- The divergence strip (slice 5) --------------------------------------
+
+   Design §7's budget made visible: per bot, the measured fill drift against
+   the declared budget, the missed-bar counters, and the distributional
+   comparison's honest state. The strip exists only when bots exist — an
+   engine that never ran has no divergence to measure, and the section's
+   other honest-empty sentences already say why. */
+
+export function DivergenceStrip({ divergence }: { divergence: TradingDivergenceStatus }) {
+  if (divergence.bots.length === 0 && divergence.breach_events.length === 0) return null;
+  return (
+    <div className="mb-3">
+      {divergence.bots.length > 0 && (
+        <div className={cardClass + " overflow-x-auto"}>
+          <table className="w-full border-collapse font-mono text-xs">
+            <thead>
+              <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
+                <th className="px-3 py-1.5 text-left font-medium">Bot</th>
+                <th className="px-3 py-1.5 text-right font-medium">Max dev</th>
+                <th className="px-3 py-1.5 text-right font-medium">Budget</th>
+                <th className="px-3 py-1.5 text-right font-medium">Max lag</th>
+                <th className="px-3 py-1.5 text-right font-medium">Missed</th>
+                <th className="px-3 py-1.5 text-right font-medium">Fills</th>
+                <th className="px-3 py-1.5 text-right font-medium">Breaches</th>
+                <th className="px-3 py-1.5 text-left font-medium">Distribution</th>
+              </tr>
+            </thead>
+            <tbody>
+              {divergence.bots.map((b) => {
+                const maxDev = b.fills.max_abs_dev_ticks;
+                const breaching =
+                  maxDev !== null &&
+                  maxDev !== undefined &&
+                  b.budget_dev_ticks !== null &&
+                  b.budget_dev_ticks !== undefined &&
+                  maxDev > b.budget_dev_ticks;
+                const lagBreaching =
+                  b.fills.max_entry_lag_bars !== null &&
+                  b.fills.max_entry_lag_bars !== undefined &&
+                  b.budget_entry_lag_bars !== null &&
+                  b.budget_entry_lag_bars !== undefined &&
+                  b.fills.max_entry_lag_bars > b.budget_entry_lag_bars;
+                const missedBreaching =
+                  b.missed_bars !== null &&
+                  b.missed_bars !== undefined &&
+                  b.budget_missed_bars !== null &&
+                  b.budget_missed_bars !== undefined &&
+                  b.missed_bars > b.budget_missed_bars;
+                return (
+                  <tr key={b.bot} className="border-b border-hair last:border-b-0">
+                    <td className="px-3 py-1 text-ink">{b.bot}</td>
+                    <td
+                      className={"px-3 py-1 text-right tabular-nums " + (breaching ? "font-medium text-down" : "text-ink")}
+                      title={
+                        maxDev === null || maxDev === undefined
+                          ? "no measured fills yet — each fill measures at write time, meaningful from n=1"
+                          : `worst |deviation| over ${b.fills.measured_fills} measured fills, mean ${b.fills.mean_abs_dev_ticks?.toFixed(2) ?? "—"} ticks`
+                      }
+                    >
+                      {maxDev === null || maxDev === undefined ? "—" : fmtTicks(maxDev)}
+                    </td>
+                    <td className="px-3 py-1 text-right tabular-nums text-ink-soft">
+                      {b.budget_dev_ticks !== null && b.budget_dev_ticks !== undefined ? `±${b.budget_dev_ticks}` : "—"}
+                    </td>
+                    <td
+                      className={"px-3 py-1 text-right tabular-nums " + (lagBreaching ? "font-medium text-down" : "text-ink")}
+                      title="worst entry timing lag in bars against the signal(k-1)→close(k) contract — zero is parity"
+                    >
+                      {b.fills.max_entry_lag_bars ?? "—"}
+                    </td>
+                    <td
+                      className={"px-3 py-1 text-right tabular-nums " + (missedBreaching ? "font-medium text-down" : "text-ink")}
+                      title={
+                        b.missed_bars === null || b.missed_bars === undefined
+                          ? "no live snapshot — the counters die with the process"
+                          : `${b.missed_bars} missed, ${b.backfilled_bars ?? 0} recovered by backfill`
+                      }
+                    >
+                      {b.missed_bars ?? "—"}
+                    </td>
+                    <td className="px-3 py-1 text-right tabular-nums text-ink-soft">{b.fills.measured_fills}</td>
+                    <td
+                      className={
+                        "px-3 py-1 text-right tabular-nums " + (b.fills.breaches > 0 ? "font-medium text-down" : "text-ink-faint")
+                      }
+                    >
+                      {b.fills.breaches}
+                    </td>
+                    <td className="px-3 py-1 text-ink-soft" title={b.distribution_note}>
+                      {b.distribution
+                        ? `bt ${b.distribution.bt_mean_pnl.toFixed(2)} vs paper ${b.distribution.paper_mean_pnl.toFixed(2)}${
+                            b.distribution.paper_mean_within_bt_p5_p95 ? " · within" : " · OUTSIDE"
+                          }`
+                        : b.distribution_note.includes("insufficient")
+                          ? "n<30 — not meaningful yet"
+                          : "no reference"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {divergence.breach_events.length > 0 && (
+        <div className="mt-2">
+          <h4 className={statLabelClass}>Budget breaches</h4>
+          <div className="mt-1 space-y-0.5 font-mono text-[0.7rem] text-ink-soft">
+            {divergence.breach_events.slice(0, 8).map((e) => {
+              const inputs = e.inputs as Record<string, unknown>;
+              const dims = Array.isArray(inputs.dimensions) ? (inputs.dimensions as string[]).join("+") : "";
+              const detail =
+                typeof inputs.dev_ticks === "number"
+                  ? `${inputs.fill_kind} ${fmtTicks(inputs.dev_ticks as number)} ticks`
+                  : typeof inputs.missed_bars === "number"
+                    ? `${inputs.missed_bars} missed bars`
+                    : "";
+              return (
+                <div key={e.id} className="flex flex-wrap gap-x-3" title={JSON.stringify(e.inputs)}>
+                  <span className="text-ink-faint">{e.created_at ? fmtClock(e.created_at) : "—"}</span>
+                  <span className="text-ink">{e.bot}</span>
+                  <span className="text-down">{dims || e.rail}</span>
+                  <span>{detail}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export const DivergenceStripForTest = DivergenceStrip;
 
 function PositionsSection({
   positions,
@@ -795,12 +1027,14 @@ function PositionsSection({
   fetchedAt,
   engineState,
   error,
+  budgets,
 }: {
   positions: TradingPosition[] | null;
   trades: TradingClosedTrade[] | null;
   fetchedAt: number;
   engineState: "offline" | "running" | null;
   error: string | null;
+  budgets?: DivergenceBudgets;
 }) {
   if (error) return <p className="text-down">{error}</p>;
   if (positions === null) return <p className="text-ink-soft">Loading…</p>;
@@ -817,7 +1051,7 @@ function PositionsSection({
             The engine is running and holds nothing. Flat is the zero position, not a missing
             dashboard: when a signal fills, the row appears here with its stop and target.
           </EmptyState>
-          {trades && trades.length > 0 && <RecentTradesStrip trades={trades} />}
+          {trades && trades.length > 0 && <RecentTradesStrip trades={trades} budgets={budgets} />}
         </>
       );
     }
@@ -828,14 +1062,14 @@ function PositionsSection({
           database at the fill itself, never at end of run. Until then there is nothing to show,
           and nothing shown is better than something invented.
         </EmptyState>
-        {trades && trades.length > 0 && <RecentTradesStrip trades={trades} />}
+        {trades && trades.length > 0 && <RecentTradesStrip trades={trades} budgets={budgets} />}
       </>
     );
   }
   return (
     <>
-      <PositionsBlotter positions={positions} fetchedAt={fetchedAt} />
-      {trades && trades.length > 0 && <RecentTradesStrip trades={trades} />}
+      <PositionsBlotter positions={positions} fetchedAt={fetchedAt} budgets={budgets} />
+      {trades && trades.length > 0 && <RecentTradesStrip trades={trades} budgets={budgets} />}
     </>
   );
 }
@@ -858,6 +1092,7 @@ export default function Trading() {
   const [strategies, setStrategies] = useState<TradingStrategy[] | null>(null);
   const [strategiesError, setStrategiesError] = useState<string | null>(null);
   const [rails, setRails] = useState<TradingRailsStatus | null>(null);
+  const [divergence, setDivergence] = useState<TradingDivergenceStatus | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -889,6 +1124,12 @@ export default function Trading() {
         /* the strip is supplementary evidence; its failure must not blank
            the positions blotter beside it — absence renders as no strip */
       });
+    getTradingDivergence()
+      .then((d) => alive && setDivergence(d))
+      .catch(() => {
+        /* same discipline as the other evidence strips — its failure
+           renders as no strip, never as a blank page */
+      });
     return () => {
       alive = false;
     };
@@ -903,12 +1144,14 @@ export default function Trading() {
         hint="Open positions as the desk wrote them at the fill — the protective levels each row carries, ages ticking. Settled round-trips below as the desk's recent evidence."
       >
         {rails !== null && <RailsStrip rails={rails} />}
+        {divergence !== null && <DivergenceStrip divergence={divergence} />}
         <PositionsSection
           positions={positions}
           trades={trades}
           fetchedAt={positionsAt}
           engineState={status?.engine_state ?? null}
           error={positionsError}
+          budgets={divergenceBudgetsOf(divergence)}
         />
       </Section>
 

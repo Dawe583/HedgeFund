@@ -30,6 +30,7 @@ from pathlib import Path
 from trading.backtest.engine import BTConfig
 from trading.harness import wrap as harness_wrap
 from trading.desk.worker import FeedHealth
+from trading.divergence import DivergenceBudget, budget_breaches, dev_ticks, reference_price
 from trading.kernel import (
     TIMEFRAME_BAR_SPEC,
     TIMEFRAME_NS,
@@ -61,6 +62,11 @@ class DeskSpec:
     strategy_cls: type
     bt_config: BTConfig = field(default_factory=BTConfig)
     strategy_params: dict = field(default_factory=dict)
+    # the declared divergence budget (design §7 gate item 6) — the registered
+    # version's declaration for registry-driven desks, the zero-drift defaults
+    # for everything else (tests, pre-registry soak bots). Never None: an
+    # undeclared budget IS the default contract, honestly reported.
+    budget: "DivergenceBudget" = field(default_factory=lambda: DivergenceBudget())
 
 
 def make_harness_config():
@@ -128,6 +134,11 @@ class DeskNode:
         # one shared book — the gross exposure cap reads desk-wide truth
         self._exposure_book = ExposureBook()
         self.instruments = {}
+        self._instrument_id_strs: dict[str, str] = {}
+        # missed-bars breach latching: the counter is monotone within a boot,
+        # so one risk_events row per boot per crossing is the honest tape —
+        # a breach re-reports across restarts because the frame counter resets
+        self._missed_breach_count: dict[str, int] = {}
         self.frames: dict[str, IncrementalFrame] = {}
         self.states: dict[str, HarnessRunState] = {}
         self.ledger = None
@@ -147,14 +158,126 @@ class DeskNode:
 
         self._manual_halt_check = _manual_halt_check
 
+    def _tick_size(self, instrument_id_str: str):
+        """The instrument's price increment out of the node cache — lazy at
+        fill time because production instruments arrive from the data client
+        at connect, after build() wires the hooks. None means unknowable,
+        and an unknowable tick size means no measurement, never an assumed
+        one."""
+        if self.node is None:
+            return None
+        try:
+            from nautilus_trader.model.identifiers import InstrumentId
+
+            instrument = self.node.cache.instrument(InstrumentId.from_str(instrument_id_str))
+        except Exception:
+            return None
+        if instrument is None:
+            return None
+        return float(instrument.price_increment.as_decimal())
+
+    def _measure_fill(self, spec: DeskSpec, pos: dict, fill: dict, kind: str) -> dict:
+        """One fill's drift measurement against the role-implied reference
+        (trading/divergence.py owns the semantics). Returns the evidence
+        keys for the pos dict — values None when the reference is honestly
+        unknowable: the filling bar missing from the frame means the fill
+        cannot be tied to the tape it claims to belong to, and inventing a
+        reference price would be exactly the lie the budget exists to catch."""
+        import pandas as pd
+
+        frame = self.frames[spec.bot].frame()
+        interval_ns = TIMEFRAME_NS[spec.timeframe]
+        open_ns = (int(fill["ts_event"]) - interval_ns) // interval_ns * interval_ns
+        key = pd.Timestamp(open_ns, unit="ns", tz="UTC")
+        out = {f"{kind}_dev_ticks": None, f"{kind}_ref_price": None}
+        if kind == "entry":
+            out["entry_lag_bars"] = None
+        try:
+            bar_pos = frame.index.get_loc(key)
+        except KeyError:
+            log.warning(
+                "%s %s fill at %s keys no frame bar (fill %.2f) — drift unmeasurable, not assumed",
+                spec.bot, kind, key.isoformat(), fill["price"],
+            )
+            return out
+        tick = self._tick_size(self._instrument_id_strs.get(spec.bot, ""))
+        if tick is None or tick <= 0:
+            return out
+        bar_close = float(frame.iloc[bar_pos]["close"])
+        ref = reference_price(fill["role"], bar_close, pos.get("stop_loss") or 0.0, pos.get("take_profit") or 0.0)
+        dev = dev_ticks(fill["price"], ref, tick)
+        out[f"{kind}_dev_ticks"] = dev
+        out[f"{kind}_ref_price"] = ref
+        lag = None
+        if kind == "entry" and pos.get("signal_bar") is not None and pos["signal_bar"] >= 0:
+            # signal(k-1) → close(k) is lag zero; every bar beyond that is the
+            # async-chain divergence class made visible
+            lag = int(bar_pos) - int(pos["signal_bar"]) - 1
+            out["entry_lag_bars"] = lag
+        breaches = budget_breaches(spec.budget, dev=dev, lag_bars=lag if kind == "entry" else None)
+        if breaches:
+            self._write_risk_event(
+                spec,
+                "divergence_budget",
+                "breached",
+                {
+                    "dimensions": breaches,
+                    "fill_kind": kind,
+                    "role": fill["role"],
+                    "dev_ticks": round(dev, 4),
+                    "budget_dev_ticks": spec.budget.dev_ticks,
+                    "lag_bars": lag,
+                    "budget_entry_lag_bars": spec.budget.entry_lag_bars,
+                    "fill_price": fill["price"],
+                    "ref_price": ref,
+                    "bar_open": key.isoformat(),
+                },
+                int(fill["ts_event"]) / 1e9,
+            )
+        return out
+
+    def _make_bar_watch(self, spec: DeskSpec, health: FeedHealth):
+        """Chained on_bar_processed: the feed-health beat plus the missed-bar
+        budget check. Missed bars are the soak acceptance dimension — bars the
+        stream never delivered and REST could not recover — and the budget is
+        the version's declared tolerance for them. The check runs at bar
+        cadence inside the kernel thread: the frame counters are written
+        there, so no lock and no staleness window exists. A crossing writes
+        one risk_events row per new maximum: the tape shows every worsening,
+        never a flood."""
+
+        def watch() -> None:
+            health.beat()
+            frame = self.frames[spec.bot]
+            missed = frame.missed_bars
+            if missed > spec.budget.missed_bars and missed > self._missed_breach_count.get(spec.bot, -1):
+                self._missed_breach_count[spec.bot] = missed
+                log.error("%s missed-bars budget breached: %d missed of %d tolerated", spec.bot, missed, spec.budget.missed_bars)
+                self._write_risk_event(
+                    spec,
+                    "divergence_budget",
+                    "breached",
+                    {
+                        "dimensions": ["missed_bars"],
+                        "missed_bars": missed,
+                        "budget_missed_bars": spec.budget.missed_bars,
+                        "backfilled_bars": frame.backfilled_bars,
+                    },
+                    0.0,
+                )
+
+        return watch
+
     def _make_hook(self, spec: DeskSpec):
         ledger = self.ledger
 
         def hook(event: str, pos: dict) -> None:
             try:
                 if event == "entry":
+                    pos.update(self._measure_fill(spec, pos, pos["entry_fill"], "entry"))
                     pos["ledger_row_id"] = ledger.entry_opened(spec.bot, {"symbol": spec.symbol}, pos)
                 elif event == "close":
+                    pos.update(self._measure_fill(spec, pos, pos["exit_fill"], "exit"))
                     ledger.position_closed(spec.bot, {"symbol": spec.symbol}, pos)
                     ledger.equity_point(self._realized_total())
             except Exception:
@@ -298,6 +421,7 @@ class DeskNode:
                 instrument_id_str = str(instrument.id)
                 node.cache.add_instrument(instrument)
             self.instruments[spec.bot] = instrument
+            self._instrument_id_strs[spec.bot] = instrument_id_str
 
             frame = IncrementalFrame(
                 interval_ns=TIMEFRAME_NS[spec.timeframe],
@@ -321,7 +445,7 @@ class DeskNode:
             state.on_veto = self._make_veto_hook(spec)
             state.on_rail_event = self._make_rail_hook(spec)
             health = FeedHealth(timeout_s=self.feed_stale_after_s)
-            state.on_bar_processed = health.beat
+            state.on_bar_processed = self._make_bar_watch(spec, health)
             self.feed_health[spec.bot] = health
             self.states[spec.bot] = state
 

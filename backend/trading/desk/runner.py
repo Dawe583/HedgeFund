@@ -66,6 +66,10 @@ def resolve_roster_specs(session_factory) -> list:
                     timeframe=entry["timeframe"],
                     strategy_cls=catalog["cls"],
                     strategy_params=entry["params"],
+                    # the registered version's declared divergence budget —
+                    # the roster carries it resolved (defaults when the
+                    # version never declared one)
+                    budget=entry["budget"],
                 )
             )
     return specs
@@ -225,6 +229,17 @@ def write_rail_snapshots(desk) -> None:
                 "gross_cap": spec.bt_config.max_gross_exposure,
             }
             snap["vetoes_total"] = len(state.vetoes)
+            # slice 5: the divergence budget as declared and the feed counters
+            # the budget is measured against — per-fill evidence lives on the
+            # trade/position rows themselves; the snapshot carries what only
+            # the live process knows (the frame's counters die with it)
+            snap["divergence"] = {
+                "budget_dev_ticks": spec.budget.dev_ticks,
+                "budget_entry_lag_bars": spec.budget.entry_lag_bars,
+                "budget_missed_bars": spec.budget.missed_bars,
+                "missed_bars": desk.frames[spec.bot].missed_bars,
+                "backfilled_bars": desk.frames[spec.bot].backfilled_bars,
+            }
             import datetime as _dt
 
             snap["written_at"] = _dt.datetime.now(_dt.UTC).isoformat()

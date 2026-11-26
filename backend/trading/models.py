@@ -66,6 +66,14 @@ class Trade(Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     mode: Mapped[str] = mapped_column(String(16), default="paper")  # paper|testnet|live
     gate_source: Mapped[str] = mapped_column(String(16), default="legacy")
+    # slice-5 divergence evidence: per-fill measured drift in ticks against
+    # the role-implied reference (bar close for market roles, the order's
+    # own level for stop/take-profit — trading/divergence.py). Nullable:
+    # rows predate the measurement, and a rearmed position's entry drift is
+    # unknowable because the original entry's bar predates the restart
+    entry_dev_ticks: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_dev_ticks: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_lag_bars: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     @property
     def pnl_pct(self) -> float:
@@ -91,6 +99,13 @@ class OpenPosition(Base):
     # re-derives position age from it; rows from before the kernel migration
     # don't carry it and are honestly unrecoverable-age, never invented
     signal_time: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # slice-5 divergence evidence: the entry fill's measured drift against
+    # the declared budget's reference (trading/divergence.py). Nullable —
+    # rows predate the measurement, or the fill's bar is not in the frame
+    # (an unknowable reference, never an invented one)
+    entry_dev_ticks: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_ref_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_lag_bars: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class EquityPoint(Base):
@@ -314,6 +329,16 @@ class StrategyVersion(Base):
     timeframe: Mapped[str] = mapped_column(String(8))
     universe_json: Mapped[str] = mapped_column(String(256), default="[]")  # symbols
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # the divergence budget (design §7 gate item 6): how far paper may drift
+    # from the fill-at-close parity contract before the lifecycle flags it.
+    # Columns on the version, not constructor params — the constructor is
+    # what the strategy IS, the budget is what the lifecycle tolerates, and
+    # registration declares both. Nullable: versions registered before
+    # slice 5 fall back to the paper engine's zero-drift defaults
+    # (trading/divergence.DivergenceBudget), honestly reported as defaults.
+    budget_dev_ticks: Mapped[float | None] = mapped_column(Float, nullable=True)
+    budget_entry_lag_bars: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    budget_missed_bars: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     strategy: Mapped[Strategy] = relationship(back_populates="versions")
     states: Mapped[list["StrategyState"]] = relationship(back_populates="version")
@@ -412,6 +437,16 @@ _SQLITE_MIGRATIONS: list[tuple[str, str, str]] = [
     ("model_versions", "weights_blob", "TEXT"),
     ("trades", "gate_source", "TEXT"),
     ("open_positions", "gate_source", "TEXT"),
+    # slice 5: divergence evidence per fill + the declared budget per version
+    ("trades", "entry_dev_ticks", "FLOAT"),
+    ("trades", "exit_dev_ticks", "FLOAT"),
+    ("trades", "entry_lag_bars", "INTEGER"),
+    ("open_positions", "entry_dev_ticks", "FLOAT"),
+    ("open_positions", "entry_ref_price", "FLOAT"),
+    ("open_positions", "entry_lag_bars", "INTEGER"),
+    ("strategy_versions", "budget_dev_ticks", "FLOAT"),
+    ("strategy_versions", "budget_entry_lag_bars", "INTEGER"),
+    ("strategy_versions", "budget_missed_bars", "INTEGER"),
 ]
 
 

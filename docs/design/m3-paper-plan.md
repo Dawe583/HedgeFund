@@ -160,3 +160,43 @@ the dashboard (fills, positions, today's vetoes, rail state).
    regardless; slice 4's registry enforces that nothing trades until a
    strategy passes the gate. That is not a blocker — it is the design's central
    promise being kept.
+
+Slice-5 implementation notes (landed 2026-11-26):
+- **The budget lives on the version, not the params.** `strategy_versions`
+  gains `budget_dev_ticks` / `budget_entry_lag_bars` / `budget_missed_bars`
+  (nullable — undeclared means the zero-drift defaults, honestly reported as
+  defaults). The constructor is what the strategy IS; the budget is what the
+  lifecycle tolerates. `register_version(..., budget=)` declares it; the
+  roster carries it resolved into `DeskSpec.budget`.
+- **Honest dimensions, three.** (1) per-fill price deviation in ticks from
+  the ROLE-IMPLIED reference — the filling bar's close for market roles
+  (fill-at-close parity; in the sandbox structurally zero, so the reading
+  is a canary for venue-model fidelity and becomes real evidence the day a
+  live venue adapter exists), the order's own level for stop/take-profit
+  (deviation there is gap-through slippage, honestly signed; the protective
+  distance itself is design, never drift). (2) entry timing lag in bars
+  against the signal(k-1)→close(k) contract — exactly the measured async-chain
+  divergence class made visible. (3) missed bars, the soak acceptance
+  counter. Veto-vs-backtest divergence is NOT drift (it is the rails
+  working); rearm cost is a documented divergence class of its own, not a
+  budget dimension.
+- **Measurement in the provenance path.** The desk's fill hook measures at
+  fill-write time (frame lookup by floored bar-open key, tick size from the
+  instrument cache) and persists `entry_dev_ticks`/`entry_ref_price`/
+  `entry_lag_bars` on open_positions, plus `exit_dev_ticks` on trades.
+  A rearmed position's entry evidence is recovered from its open row at
+  close time — the restart does not get to erase the original entry's
+  measurement. Breaches write `risk_events` rows with rail
+  `divergence_budget`: visible, never silent.
+- **Distributional comparison gates on n≥30 per side** (the validation
+  gate's own statistical bar) and is descriptive when it exists — means,
+  medians, whether the paper mean sits inside the backtest's p5–p95 —
+  never a p-value over small autocorrelated samples. In M3's production
+  reality it is always insufficient-data; the pure function and endpoint
+  path are tested, and the honest note is what the dashboard shows.
+- **The event-loop flake is fixed at the root.** The full-suite
+  `No event loop available in test environment` failures (5 on pristine
+  HEAD, growing with node count) were pytest-asyncio's loop lifecycle
+  racing nautilus's construction-time `get_event_loop` — never the tests'
+  content. `tests_trading/conftest.py` now guarantees every test a fresh
+  main-thread loop; 250/250 pass in the combination run.

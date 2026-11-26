@@ -1,4 +1,4 @@
-import type { BacktestRun, TradingStatus } from "../api/trading";
+import type { BacktestRun, TradingDivergenceStatus, TradingStatus } from "../api/trading";
 
 /* The Trading page's logic, pure and testable: every decision the page makes
    about what to show — what the verdict badge says, what colour it wears, how
@@ -122,4 +122,33 @@ export function fmtCi(lo: number | null, hi: number | null): string {
     folds. */
 export function fmtFolds(positive: number, total: number): string {
   return `${positive}/${total}`;
+}
+
+/** Ticks of drift as the blotter/terminal readout — one decimal, sign kept
+    because systematic sign IS the signal (consistently negative entry
+    deviation reads as adverse selection; magnitude alone hides it). Null
+    renders as a dash, never a zero: unmeasured is a different fact than
+    zero deviation. */
+export function fmtTicks(dev: number | null | undefined): string {
+  if (dev === null || dev === undefined) return "—";
+  const v = Math.abs(dev) < 0.05 ? 0 : dev;
+  return (v > 0 ? "+" : "") + v.toFixed(1);
+}
+
+/** Per-bot divergence budget lookup the blotter/trades strips color against.
+    Maps bot -> max dev ticks the version declared; absent means no snapshot
+    exists and nothing colors — an unknown budget is never a zero budget. */
+export type DivergenceBudgets = Map<string, number>;
+
+export function divergenceBudgetsOf(
+  divergence: TradingDivergenceStatus | null,
+): DivergenceBudgets {
+  const out: DivergenceBudgets = new Map();
+  if (!divergence) return out;
+  for (const b of divergence.bots) {
+    if (b.budget_dev_ticks !== null && b.budget_dev_ticks !== undefined) {
+      out.set(b.bot, b.budget_dev_ticks);
+    }
+  }
+  return out;
 }

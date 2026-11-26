@@ -39,6 +39,7 @@ import inspect
 import json
 
 from sqlalchemy import select
+from trading.divergence import DivergenceBudget
 
 from trading.models import (
     Approval,
@@ -114,11 +115,18 @@ def register_version(
     timeframe: str,
     universe: list[str],
     params: dict,
+    budget: "DivergenceBudget | None" = None,
 ) -> StrategyVersion:
     """A new version row in state research. The constructor is validated
     HERE, not at roster time: a version whose params its own class cannot
     accept is a registration error, and registration is the cheap place to
-    say so."""
+    say so.
+
+    budget: the divergence budget declaration (design §7 gate item 6) — how
+    far paper may drift from the fill-at-close parity contract before the
+    lifecycle flags it. None means never declared: the columns stay null
+    and the desk measures against the zero-drift defaults, honestly
+    reported as defaults rather than invented precision."""
     try:
         cls(**params)
     except TypeError as exc:
@@ -143,6 +151,9 @@ def register_version(
         code_hash=code_hash_of(cls),
         timeframe=timeframe,
         universe_json=json.dumps(list(universe)),
+        budget_dev_ticks=budget.dev_ticks if budget is not None else None,
+        budget_entry_lag_bars=budget.entry_lag_bars if budget is not None else None,
+        budget_missed_bars=budget.missed_bars if budget is not None else None,
     )
     session.add(version)
     session.flush()
@@ -257,6 +268,7 @@ def roster(session) -> list[dict]:
                 "timeframe": v.timeframe,
                 "universe": json.loads(v.universe_json or "[]"),
                 "code_hash": v.code_hash,
+                "budget": DivergenceBudget.from_row(v),
             }
         )
     return sorted(out, key=lambda r: r["bot"])

@@ -37,6 +37,18 @@ class TradingRailExposure(BaseModel):
     gross_cap: float
 
 
+class TradingRailDivergence(BaseModel):
+    """The divergence budget as the version declared it, plus the feed
+    counters the live process measures against it. None on the wire means
+    the snapshot predates slice 5 — never zeros, because zero is a claim."""
+
+    budget_dev_ticks: float
+    budget_entry_lag_bars: int
+    budget_missed_bars: int
+    missed_bars: int
+    backfilled_bars: int
+
+
 class TradingBotRails(BaseModel):
     """One bot's rail state as the desk's snapshot last wrote it — every
     number the rails themselves computed, plus the exposure book's slice.
@@ -59,6 +71,9 @@ class TradingBotRails(BaseModel):
     cooldown_remaining_s: float
     vetoes_total: int
     exposure: TradingRailExposure | None
+    divergence: "TradingRailDivergence | None" = None
+
+
 
 
 class TradingRiskEvent(BaseModel):
@@ -83,6 +98,11 @@ class TradingRailsStatus(BaseModel):
     halt_sentinel_path: str
     bots: list[TradingBotRails]
     recent_events: list[TradingRiskEvent]
+    # today's refused entries (UTC day, server clock) — the slice-5 veto tape:
+    # every entry the caps or the rails said no to, with the inputs the
+    # refusal stood on. Empty is the honest answer — a day with no vetoes
+    # is a day the rails were never tested, which is information too.
+    vetoes_today: list[TradingRiskEvent]
 
 
 class TradingStrategy(BaseModel):
@@ -182,6 +202,14 @@ class TradingPosition(BaseModel):
     confidence: float
     signal_time: dt.datetime | None
     gate_source: str
+    # slice-5 per-fill divergence evidence: deviation in ticks from the
+    # role-implied reference (the filling bar's close for the market entry),
+    # and timing lag against the signal(k-1)→close(k) contract. Null means
+    # unmeasured — the row predates slice 5, or the reference bar was
+    # honestly unknowable
+    entry_dev_ticks: float | None
+    entry_ref_price: float | None
+    entry_lag_bars: int | None
 
 
 class TradingClosedTrade(BaseModel):
@@ -201,3 +229,60 @@ class TradingClosedTrade(BaseModel):
     confidence: float
     mode: str
     gate_source: str
+    entry_dev_ticks: float | None
+    exit_dev_ticks: float | None
+    entry_lag_bars: int | None
+
+
+class TradingDivergenceFillStats(BaseModel):
+    """Per-fill drift evidence aggregated over the bot's closed trades —
+    the mechanical divergence measurement, meaningful at n=1 because each
+    fill is one kernel fact compared against its own bar."""
+
+    measured_fills: int
+    mean_abs_dev_ticks: float | None
+    max_abs_dev_ticks: float | None
+    max_entry_lag_bars: int | None
+    breaches: int
+
+
+class TradingDivergenceDistribution(BaseModel):
+    """Paper-vs-backtest per-trade pnl positioning — present ONLY when both
+    sides have ≥30 trades (the same statistical bar the validation gate
+    sets). Descriptive, never inferential: no p-values over small
+    autocorrelated samples."""
+
+    bt_trades: int
+    paper_trades: int
+    bt_mean_pnl: float
+    paper_mean_pnl: float
+    bt_median_pnl: float
+    paper_mean_within_bt_p5_p95: bool
+    bt_p5: float
+    bt_p95: float
+
+
+class TradingBotDivergence(BaseModel):
+    """One bot's divergence picture: the declared budget, the live feed
+    counters, the aggregated per-fill evidence, and the distributional
+    comparison when — and only when — the data volume makes it meaningful."""
+
+    bot: str
+    budget_dev_ticks: float | None
+    budget_entry_lag_bars: int | None
+    budget_missed_bars: int | None
+    missed_bars: int | None
+    backfilled_bars: int | None
+    open_positions: list[TradingPosition]
+    fills: TradingDivergenceFillStats
+    distribution: TradingDivergenceDistribution | None
+    distribution_note: str
+
+
+class TradingDivergenceStatus(BaseModel):
+    """/api/trading/divergence — the slice-5 surface. Bots come from two
+    sources unioned: the rail snapshots (live processes) and the trade
+    rows (evidence). Empty bots is the honest first-class answer."""
+
+    bots: list[TradingBotDivergence]
+    breach_events: list[TradingRiskEvent]

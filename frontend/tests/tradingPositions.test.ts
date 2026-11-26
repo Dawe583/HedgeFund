@@ -41,6 +41,9 @@ const POSITION = {
   confidence: 0.62,
   signal_time: "2026-11-26T07:55:00+00:00",
   gate_source: "kernel",
+  entry_dev_ticks: 0.1,
+  entry_ref_price: 90999.9,
+  entry_lag_bars: 0,
 };
 
 const TRADE = {
@@ -58,6 +61,9 @@ const TRADE = {
   confidence: 0.4,
   mode: "paper",
   gate_source: "kernel",
+  entry_dev_ticks: 0.0,
+  exit_dev_ticks: -0.2,
+  entry_lag_bars: 0,
 };
 
 const cleanups: (() => void)[] = [];

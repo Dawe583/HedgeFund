@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.schemas_trading import (
     TradingClosedTrade,
+    TradingDivergenceStatus,
     TradingPosition,
     TradingRunDetail,
     TradingRailsStatus,
@@ -149,6 +150,7 @@ def trading_rails(db: Session = Depends(get_trading_db)) -> dict:
                 "max_losses": snap.get("max_losses", 3),
                 "cooldown_remaining_s": snap.get("cooldown_remaining_s", 0.0),
                 "vetoes_total": snap.get("vetoes_total", 0),
+                "divergence": snap.get("divergence"),
                 "exposure": snap.get("exposure"),
             }
         )
@@ -182,8 +184,44 @@ def trading_rails(db: Session = Depends(get_trading_db)) -> dict:
         "halt_sentinel_path": sentinel_path,
         "bots": bots,
         "recent_events": events,
+        "vetoes_today": _vetoes_today(db),
     }
 
+
+def _vetoes_today(db: Session) -> list[dict]:
+    """Today's refused entries (UTC day, server clock) — veto rows are
+    risk_events with decision='veto', one tape for sizing caps and rails
+    alike. The day boundary is the wall clock on purpose: 'today's vetoes'
+    is the operator's question, and the operator's day is UTC here like
+    every other clock in the system."""
+    from trading.models import RiskEvent as _RE
+
+    day_start = dt.datetime.now(dt.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        rows = (
+            db.execute(
+                select(_RE)
+                .where(_RE.decision == "veto", _RE.created_at >= day_start)
+                .order_by(_RE.id.desc())
+                .limit(100)
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "created_at": _as_iso(r.created_at),
+                "bot": r.bot,
+                "symbol": r.symbol,
+                "rail": r.rail,
+                "decision": r.decision,
+                "inputs": json.loads(r.inputs_json or "{}"),
+            }
+            for r in rows
+        ]
+    except (OperationalError, SQLAlchemyError):
+        return []
 
 @router.get("/status", response_model=TradingStatus)
 def trading_status(db: Session = Depends(get_trading_db)) -> dict:
@@ -250,6 +288,12 @@ def _position_payload(row: OpenPosition, now: dt.datetime) -> dict:
         "confidence": row.confidence,
         "signal_time": _as_iso(row.signal_time),
         "gate_source": row.gate_source,
+        # nullable columns on databases migrated from before slice 5 read
+        # as missing attributes on very old engines — getattr, never an
+        # invented zero
+        "entry_dev_ticks": getattr(row, "entry_dev_ticks", None),
+        "entry_ref_price": getattr(row, "entry_ref_price", None),
+        "entry_lag_bars": getattr(row, "entry_lag_bars", None),
     }
 
 
@@ -302,6 +346,9 @@ def list_recent_trades(db: Session = Depends(get_trading_db)) -> list[dict]:
             "confidence": t.confidence,
             "mode": t.mode,
             "gate_source": t.gate_source,
+            "entry_dev_ticks": getattr(t, "entry_dev_ticks", None),
+            "exit_dev_ticks": getattr(t, "exit_dev_ticks", None),
+            "entry_lag_bars": getattr(t, "entry_lag_bars", None),
         }
         for t in rows
     ]
@@ -432,3 +479,183 @@ def backtest_run_detail(run_id: int, db: Session = Depends(get_trading_db)) -> d
         raw = getattr(run, column, None)
         payload[key] = json.loads(raw) if raw else None
     return payload
+
+
+def _registry_bot_key(bot: str) -> str | None:
+    """The catalog key a registry-booted bot name encodes: `<key>-v<N>`
+    (optionally `-<symbol>` for multi-symbol universes, per the runner's
+    naming). None for pre-registry residents — their trades are provenance
+    of the pre-registry era and have no validation reference to compare
+    against, which the endpoint reports honestly as no distribution."""
+    import re
+
+    m = re.match(r"^([a-z0-9_]+)-v(\d+)(?:-[a-z0-9]+)?$", bot)
+    return m.group(1) if m else None
+
+
+@router.get("/divergence", response_model=TradingDivergenceStatus)
+def trading_divergence(db: Session = Depends(get_trading_db)) -> dict:
+    """The slice-5 divergence surface: per bot, the declared budget, the live
+    feed counters, the aggregated per-fill drift evidence, and the paper-vs-
+    backtest distributional comparison when the data volume makes it
+    meaningful (n≥30 on BOTH sides — the validation gate's own statistical
+    bar; smaller samples are reported as insufficient, never as fake
+    statistics).
+
+    Sources, honestly separated: budgets and feed counters come from the
+    desk runner's rail snapshots (kernel memory is the truth, the snapshot
+    its rendering), per-fill evidence aggregates the trade rows the desk
+    wrote at fill time. Bots present in neither surface simply do not
+    appear — an engine that never ran has no divergence to measure, and
+    empty is the first-class answer."""
+    from trading.divergence import compare_distributions
+    from trading.models import BacktestValidation as _BV
+    from trading.models import RiskEvent, get_state
+
+    if not _tables_present(db):
+        return {"bots": [], "breach_events": []}
+
+    # ---- snapshot-derived budgets and counters
+    snaps: dict[str, dict] = {}
+    try:
+        names = [
+            row.name
+            for row in db.execute(select(BotStatus)).scalars()
+            if row.name.startswith("__state_rails/")
+        ]
+        for name in names:
+            bot = name[len("__state_rails/"):]
+            snap = get_state(db, f"rails/{bot}", None)
+            if isinstance(snap, dict):
+                snaps[bot] = snap
+    except (OperationalError, SQLAlchemyError):
+        snaps = {}
+
+    # ---- per-fill evidence over the closed-trade rows
+    trades: dict[str, list] = {}
+    try:
+        rows = db.execute(select(Trade).order_by(Trade.exit_time)).scalars().all()
+        for t in rows:
+            trades.setdefault(t.bot, []).append(t)
+    except OperationalError:
+        rows = []
+
+    # ---- open positions, per bot
+    open_positions: dict[str, list[dict]] = {}
+    try:
+        now = dt.datetime.now(dt.UTC)
+        for row in db.execute(select(OpenPosition)).scalars().all():
+            open_positions.setdefault(row.bot, []).append(_position_payload(row, now))
+    except OperationalError:
+        pass
+
+    bots: list[dict] = []
+    for bot in sorted(set(snaps) | set(trades) | set(open_positions)):
+        snap = snaps.get(bot, {})
+        div = snap.get("divergence") if isinstance(snap.get("divergence"), dict) else {}
+        rows = trades.get(bot, [])
+
+        devs: list[float] = []
+        lags: list[int] = []
+        for t in rows:
+            for v in (getattr(t, "entry_dev_ticks", None), getattr(t, "exit_dev_ticks", None)):
+                if v is not None:
+                    devs.append(abs(v))
+            lag = getattr(t, "entry_lag_bars", None)
+            if lag is not None:
+                lags.append(lag)
+        measured = len(devs)
+        budget_dev = div.get("budget_dev_ticks")
+        breaches = 0
+        if budget_dev is not None:
+            for t in rows:
+                for v in (getattr(t, "entry_dev_ticks", None), getattr(t, "exit_dev_ticks", None)):
+                    if v is not None and abs(v) > budget_dev:
+                        breaches += 1
+                lag = getattr(t, "entry_lag_bars", None)
+                lag_budget = div.get("budget_entry_lag_bars")
+                if lag is not None and lag_budget is not None and lag > lag_budget:
+                    breaches += 1
+
+        # the distributional comparison — registry-booted bots only, against
+        # the validation run whose verdict put the version into paper. Both
+        # sides need n≥30 (trading/divergence.py owns the gate); anything
+        # less is reported with the reason, never as statistics.
+        distribution = None
+        distribution_note = "no validation reference — the bot is not registry-booted"
+        key = _registry_bot_key(bot)
+        if key is not None:
+            validation = (
+                db.execute(
+                    select(_BV)
+                    .where(_BV.bot == key, _BV.verdict == "validated")
+                    .order_by(_BV.id.desc())
+                    .limit(1)
+                )
+                .scalars()
+                .first()
+            )
+            if validation is None or validation.run_id is None:
+                distribution_note = "no validated backtest reference exists for this version"
+            else:
+                run = db.get(BacktestRun, validation.run_id)
+                bt_trades = json.loads(run.trades_json) if run is not None and run.trades_json else []
+                bt_pnls = [float(tr["pnl"]) for tr in bt_trades if isinstance(tr, dict) and "pnl" in tr]
+                paper_pnls = [float(t.pnl) for t in rows]
+                distribution = compare_distributions(bt_pnls, paper_pnls)
+                if distribution is None:
+                    distribution_note = (
+                        f"insufficient data for a distributional comparison "
+                        f"(backtest {len(bt_pnls)} trades, paper {len(paper_pnls)} — "
+                        f"the statistical bar is 30 per side, the same the validation gate sets)"
+                    )
+
+        bots.append(
+            {
+                "bot": bot,
+                "budget_dev_ticks": budget_dev,
+                "budget_entry_lag_bars": div.get("budget_entry_lag_bars"),
+                "budget_missed_bars": div.get("budget_missed_bars"),
+                "missed_bars": div.get("missed_bars"),
+                "backfilled_bars": div.get("backfilled_bars"),
+                "open_positions": open_positions.get(bot, []),
+                "fills": {
+                    "measured_fills": measured,
+                    "mean_abs_dev_ticks": (sum(devs) / len(devs)) if devs else None,
+                    "max_abs_dev_ticks": max(devs) if devs else None,
+                    "max_entry_lag_bars": max(lags) if lags else None,
+                    "breaches": breaches,
+                },
+                "distribution": distribution,
+                "distribution_note": distribution_note,
+            }
+        )
+
+    breach_events: list[dict] = []
+    try:
+        rows_events = (
+            db.execute(
+                select(RiskEvent)
+                .where(RiskEvent.rail == "divergence_budget")
+                .order_by(RiskEvent.id.desc())
+                .limit(25)
+            )
+            .scalars()
+            .all()
+        )
+        breach_events = [
+            {
+                "id": r.id,
+                "created_at": _as_iso(r.created_at),
+                "bot": r.bot,
+                "symbol": r.symbol,
+                "rail": r.rail,
+                "decision": r.decision,
+                "inputs": json.loads(r.inputs_json or "{}"),
+            }
+            for r in rows_events
+        ]
+    except (OperationalError, SQLAlchemyError):
+        breach_events = []
+
+    return {"bots": bots, "breach_events": breach_events}

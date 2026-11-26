@@ -42,6 +42,7 @@ def evaluate_cell(payload: dict) -> dict:
     from trading.bots.regime_continuation_bot import RegimeContinuation
     from trading.bots.ml_forecast_bot import MLForecast
     from trading.bots.alpha_signal_bot import AlphaSignal
+    from trading.bots.alpha_basket_bot import AlphaBasket
     from trading.search import Candidate, evaluate_candidate, in_sample, load_frame, open_ledger, out_of_sample, rails_off_config
 
     makers = {
@@ -57,7 +58,23 @@ def evaluate_cell(payload: dict) -> dict:
         "breakout": lambda p: BreakoutVol(**p),
         "meanrev": lambda p: MeanRev(**p),
     }
-    if payload["bot_key"] == "alphasig":
+    if payload["bot_key"] == "alphabasket":
+        import importlib as _il2
+
+        alpha_id = payload["params"]["alpha"]
+        zoo, num = alpha_id.split("_")
+        compute_fn = _il2.import_module(f"trading.factors.zoo.{zoo}.alpha_{num}").compute
+
+        def make(p, _c=compute_fn):
+            return AlphaBasket(
+                alpha_compute=_c,
+                alpha_symbols=list(payload.get("basket") or [payload["symbol"]]),
+                alpha_research_db=payload["research_db"],
+                tail=p["tail"],
+                rebalance=p["rebalance"],
+                invert=p["invert"],
+            )
+    elif payload["bot_key"] == "alphasig":
         import importlib as _il
 
         alpha_id = payload["params"]["alpha"]

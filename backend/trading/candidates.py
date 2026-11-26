@@ -411,3 +411,52 @@ def _make_alpha_signal(compute_fn, params):
 
 
 GRIDS["F10"] = alpha_survivor_candidates
+
+
+# F11: alpha-ranked basket — declared in program-2026-11-26 (budget 24)
+F11_ALPHAS = [
+    ("gtja191_093", False),  # microstructure alive — the least crowded signature
+    ("gtja191_126", False),  # reversal alive
+    ("gtja191_159", True),   # momentum reversed — inverted because the bench measured it
+]
+F11_TAIL = [2, 3]
+F11_REBALANCE = [24, 48]
+F11_UNIVERSE = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "LINKUSDT", "LTCUSDT"]
+
+
+def alpha_basket_candidates(symbols=None) -> list[Candidate]:
+    """The F11 grid: 3 decorrelated survivors x 2 tail sizes x 2 rebalance
+    periods = 12 baskets, x 2 phases = the 24-cell budget exactly. Each
+    basket is ONE ledger cell spanning the universe — the F3 composite
+    convention, because a basket's PnL is one stream, not eight."""
+    import importlib
+
+    from trading.bots.alpha_basket_bot import AlphaBasket
+
+    universe = list(symbols) if symbols else list(F11_UNIVERSE)
+    out = []
+    for alpha_id, invert in F11_ALPHAS:
+        zoo, num = alpha_id.split("_")
+        compute_fn = importlib.import_module(f"trading.factors.zoo.{zoo}.alpha_{num}").compute
+        for tail in F11_TAIL:
+            for rebalance in F11_REBALANCE:
+                params = {"tail": tail, "rebalance": rebalance, "invert": invert}
+                name = f"absk-{alpha_id.split('_')[1]}{'i' if invert else ''}-k{tail}-r{rebalance}"
+                out.append(
+                    Candidate(
+                        family="F11-alphabasket",
+                        name=name,
+                        bot_key="alphabasket",
+                        params={**params, "alpha": alpha_id},
+                        make=lambda p, _c=compute_fn: AlphaBasket(
+                            alpha_compute=_c, alpha_symbols=universe, tail=p["tail"],
+                            rebalance=p["rebalance"], invert=p["invert"],
+                        ),
+                        symbols=universe,
+                        timeframe="4h",
+                    )
+                )
+    return out
+
+
+GRIDS["F11"] = alpha_basket_candidates

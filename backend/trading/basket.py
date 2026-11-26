@@ -113,6 +113,18 @@ def evaluate_basket(
 
     records, composite = compose_basket(results, initial)
     n_trades = len(records)
+    # walk-forward over the COMPOSITE trade stream — the basket is one
+    # equity curve, so its edge decay is measured exactly where its PnL
+    # lives. Regression note 2026-11-26: this line repairs the basket path
+    # broken when per-symbol wf persistence referenced a `core` that never
+    # existed here.
+    try:
+        from trading.validation.validation import walk_forward_analysis
+
+        wf = walk_forward_analysis(composite, records, n_windows=5, bars_per_year=bars_per_year, initial_capital=composite_initial)
+        wf_windows = wf.get("windows", []) if isinstance(wf, dict) else []
+    except Exception:
+        wf_windows = []
     composite_initial = initial * len(symbols)
     bars_per_year = BarsPerYear.get(candidate.timeframe, 2190)
     gate = gate_stats(records, composite, composite_initial, seed, bars_per_year, min_trades, n_trades)
@@ -143,9 +155,7 @@ def evaluate_basket(
         "seed": seed,
         "reasons_json": json.dumps(gate["reasons"]),
         "elapsed_s": elapsed,
-        "wf_windows_json": json.dumps(
-            core.get("validation_payload", {}).get("walk_forward", {}).get("windows", [])
-        ),
+        "wf_windows_json": json.dumps(wf_windows),
         "legs_json": json.dumps(legs, sort_keys=True),
     }
     row_id = ledger_append(conn, row)

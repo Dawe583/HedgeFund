@@ -67,3 +67,7 @@ OpenTerminal/
 # Graphify knowledge tooling artifacts
 graphify-out/
 .knowledge/
+
+# Worktrunk task worktrees (wt switch --create) live here by project config;
+# they are full checkouts, never part of the product tree.
+.worktrees/

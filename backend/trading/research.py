@@ -203,6 +203,28 @@ def trades_to_records(trades: list[dict], symbol: str) -> list[TradeRecord]:
     return out
 
 
+def load_funding_rates(research_db: str, symbol: str) -> pd.Series | None:
+    """Settlement instants → signed rate for one symbol, or None when the
+    funding table is absent/empty — absence must never crash a validation,
+    funding economics is opt-in provenance (kernel accrual, 2026-11-26)."""
+    try:
+        engine = make_engine(research_db)
+        try:
+            with engine.connect() as conn:
+                rows = pd.read_sql(
+                    "SELECT funding_time, rate FROM funding_rates WHERE symbol = ? ORDER BY funding_time",
+                    conn, params=(symbol.upper(),),
+                )
+        finally:
+            engine.dispose()
+    except Exception:
+        return None
+    if rows.empty:
+        return None
+    idx = pd.to_datetime(rows["funding_time"], utc=True)
+    return pd.Series(rows["rate"].astype(float).values, index=idx, name="_funding_rate")
+
+
 def validate_core(
     strategy,
     bot_key: str,
@@ -241,6 +263,24 @@ def validate_core(
         df = build_features(raw)
     elif len(df) == 0:
         raise SystemExit(f"empty frame passed for {symbol} {timeframe} — a window with no bars validates nothing")
+
+    # funding join (F2 machinery, 2026-11-26): each settlement instant lands
+    # on the bar whose open matches it; the kernel accrues rate x entry-
+    # notional for positions open across it. Bars between settlements carry
+    # NaN — the kernel treats NaN as no event. A symbol without funding
+    # history accrues nothing, which is exactly honest for spot-truth candles.
+    if "_funding_rate" not in df.columns:
+        rates = load_funding_rates(research_db, symbol)
+        if rates is not None and len(rates):
+            col = pd.Series(float("nan"), index=df.index, dtype=float)
+            bar_ns = df.index.asi8
+            rate_ns = rates.index.asi8
+            for j, ts in enumerate(rate_ns):
+                hit = int((bar_ns == ts).nonzero()[0][0]) if (bar_ns == ts).any() else -1
+                if hit >= 0:
+                    col.iloc[hit] = float(rates.iloc[j])
+            df = df.copy()
+            df["_funding_rate"] = col
 
     bars_per_year = BarsPerYear.get(timeframe, 8_760)
     cfg = cfg or BTConfig()

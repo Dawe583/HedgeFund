@@ -174,3 +174,39 @@ def catalog_control_candidates(symbols=("BTCUSDT",)) -> list[Candidate]:
 
 
 GRIDS["F6"] = catalog_control_candidates
+
+
+# F2 — funding-carry direction. 20-point budget, exact fit:
+# lookback x threshold x entry_dev = 2x2x2 = 8 per symbol, x2 symbols = 16,
+# plus 4 untimed variants (entry_dev=0 isolates whether timing adds anything).
+# Declared in program-2026-11-26 BEFORE the machinery existed — the kernel
+# funding accrual landed the same evening and this grid is its first consumer.
+F2_LOOKBACKS = (9, 21)          # settlement events: 3d / 7d regime windows
+F2_THRESHOLDS = (0.00005, 0.0001)  # 0.005% / 0.01% per 8h significance bars
+F2_ENTRY_DEVS = (0.0, 1.0)      # 0 = untimed regime-following, 1 = cheap entry
+
+
+def funding_carry_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
+    from trading.bots.funding_carry_bot import FundingCarry
+
+    out: list[Candidate] = []
+    syms = list(symbols)[:2]  # the budget is 20: 8x2 timed + 4 untimed, no trimming
+    for lookback in F2_LOOKBACKS:
+        for threshold in F2_THRESHOLDS:
+            for entry_dev in F2_ENTRY_DEVS:
+                params = {"lookback": lookback, "threshold": threshold,
+                          "entry_dev": entry_dev, "max_bars": 72}
+                name = f"fundcarry-l{lookback}-t{int(threshold*1e6)}-e{entry_dev}"
+                out.append(Candidate(
+                    family="F2-funding-carry",
+                    name=name,
+                    bot_key="fundingcarry",
+                    params=params,
+                    make=lambda p: FundingCarry(**p),
+                    symbols=syms,
+                    timeframe="1h",
+                ))
+    return out
+
+
+GRIDS["F2"] = funding_carry_candidates

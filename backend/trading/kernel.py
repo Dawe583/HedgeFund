@@ -409,6 +409,31 @@ def _make_strategy_class():
             if k < 1:
                 return  # nothing precedes the first bar; no signal can exist
 
+            # funding accrual (F2 machinery, 2026-11-26): the settlement is an
+            # instant, not a window — a position open across it transfers
+            # rate x entry-notional, sign-conventional: positive rate means
+            # longs pay shorts. The frame carries the rate keyed to the bar
+            # whose open instant matches the settlement instant (validate_core
+            # joins the funding table onto the candle grid); absent the column,
+            # nothing accrues and the harness is exactly as before — funding
+            # economics is opt-in provenance, never a silent default.
+            if "_funding_rate" in df.columns and self._open_pos is not None and not self._open_pos.get("pending"):
+                pos_f = self._open_pos
+                if pos_f.get("funding_mark_s") is None:
+                    # only settlements strictly after the entry instant count —
+                    # entry at a close means nothing earlier was the position's
+                    prev_entry_s = pos_f["entry_fill"]["ts_event"] / 1e9
+                    pos_f["funding_mark_s"] = prev_entry_s
+                rate_now = df["_funding_rate"].iloc[k]
+                if isinstance(rate_now, float) and not math.isnan(rate_now) and rate_now != 0.0:
+                    # entry_fill price, not entry_price_net: the net field is
+                    # written only at settle, funding accrues while the trade lives
+                    notional = pos_f["qty"] * pos_f["entry_fill"]["price"]
+                    direction = 1 if pos_f["side"] == "long" else -1
+                    cost = float(rate_now) * notional * direction
+                    self._state.realized_net -= cost
+                    pos_f["funding_accrued"] = pos_f.get("funding_accrued", 0.0) + cost
+
             sig_bar = k - 1
             sig = self._strategy.signal(sig_bar, df.iloc[: sig_bar + 1])
 

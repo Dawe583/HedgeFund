@@ -233,6 +233,10 @@ def evaluate_candidate(
     injector = getattr(instance, "inject_frame", None)
     if callable(injector):
         df = injector(df, symbol)
+    # the worker passes the full frame so injected causal columns can warm
+    # up across the boundary; the backtest itself never crosses it — slice
+    # unconditionally, after injection if there was one
+    df = in_sample(df) if phase == "A" else out_of_sample(df)
     core = validate_core(
         instance,
         candidate.bot_key,

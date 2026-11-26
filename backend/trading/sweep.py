@@ -137,7 +137,18 @@ def evaluate_cell(payload: dict) -> dict:
                 )
                 return {k: row.get(k) for k in ("id", "candidate", "symbol", "verdict", "trades_n", "permutation_p", "sharpe", "elapsed_s")}
             df = load_frame(payload["research_db"], payload["symbol"], payload["timeframe"])
-            window = in_sample(df) if payload["phase"] == "A" else out_of_sample(df)
+            # warm-up rule: the full frame goes in, the phase slice happens
+            # inside evaluate_candidate AFTER injection — injected causal
+            # columns reach back across the boundary, backtest does not
+            window = df
+            # causal-warm-up honesty (2026-11-27): injected columns (rolling
+            # ML predictions, alpha values) legitimately reach back before the
+            # window start — a model trained on in-sample history scoring the
+            # first out-of-sample bar is causal use, identical in shape to the
+            # kernel's own ATR warm-up. Injection therefore runs on the FULL
+            # frame inside evaluate_candidate and the frame is sliced after;
+            # the artifact cache keys on frame content, so phase B reuses the
+            # phase A precompute instead of paying it twice.
             row = evaluate_candidate(
                 conn,
                 candidate,

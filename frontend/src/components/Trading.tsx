@@ -1,7 +1,11 @@
 import { Fragment, useEffect, useState } from "react";
 import {
+  approveVersion,
   getBacktestRun,
   getBacktestRuns,
+  getTradingRegistry,
+  isConflict,
+  setKillSwitch,
   getTradingDivergence,
   getRecentTrades,
   getTradingPositions,
@@ -18,12 +22,13 @@ import {
   type TradingRailsStatus,
   type TradingStatus,
   type TradingStrategy,
+  type TradingRegistryVersion,
 } from "../api/trading";
 import { Blotter } from "../viz/Blotter";
 import { EquityChart } from "../viz/EquityChart";
 import { fromApiCurve } from "../viz/equityData";
 import { EmptyState } from "./Emblem";
-import { apiError, cardClass, Section, statLabelClass } from "./ui";
+import { apiError, btnClass, cardClass, inputClass, Section, statLabelClass } from "./ui";
 import {
   divergenceBudgetsOf,
   engineReading,
@@ -1077,6 +1082,333 @@ function PositionsSection({
 export const PositionsSectionForTest = PositionsSection;
 
 
+
+/* ---- The kill-switch control ------------------------------------------------
+
+   The first control surface of the terminal: not a readout but a HAND on the
+   engine. It sits at instrument-panel rank — hairline frame, square lamp,
+   mono voice — and its asymmetry is the design's: throwing the switch ON is
+   one click, because halting entries is the safe failure and speed beats
+   paperwork in that direction; re-arming is the dangerous direction, so it
+   opens a confirm strip that demands the operator's sentence — the audit row
+   the backend writes deserves a why, and the backend enforces it server-side
+   (422) so this chrome is convenience, never the gate. */
+
+export function KillSwitchControl({
+  tripped,
+  note,
+  onChanged,
+}: {
+  tripped: boolean;
+  note: string;
+  onChanged: () => void;
+}) {
+  const [arming, setArming] = useState(false);
+  const [armNote, setArmNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function throwSwitch() {
+    setBusy(true);
+    setError(null);
+    try {
+      await setKillSwitch(true, "");
+      onChanged();
+    } catch (e) {
+      setError(apiError(e, "The kill-switch could not be thrown."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reArm() {
+    setBusy(true);
+    setError(null);
+    try {
+      await setKillSwitch(false, armNote.trim());
+      setArming(false);
+      setArmNote("");
+      onChanged();
+    } catch (e) {
+      setError(apiError(e, "The kill-switch could not be re-armed."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className={"border-l-2 border-y border-r px-3 py-2 " + (tripped ? "border-down bg-down-tint" : "border-rule bg-surface")}>
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono">
+        <span className="flex items-center gap-2">
+          <span className={"inline-block h-2.5 w-2.5 " + (tripped ? "bg-down" : "bg-up")} aria-hidden="true" />
+          <span className="text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint">Kill-switch</span>
+        </span>
+        <span className="text-xs text-ink">
+          {tripped ? "TRIPPED — entries halted desk-wide; protective exits keep flowing" : "clear — entries flow"}
+        </span>
+        {tripped && note ? <span className="text-[0.7rem] text-ink-soft">{note}</span> : null}
+        <span className="ml-auto">
+          {tripped ? (
+            <button
+              type="button"
+              className={btnClass}
+              disabled={busy}
+              onClick={() => {
+                setArming((v) => !v);
+                setError(null);
+              }}
+            >
+              Re-arm…
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="rounded-sm bg-down px-3 py-1.5 font-mono text-xs font-medium tracking-wide text-on-accent transition hover:opacity-90 disabled:opacity-50"
+              disabled={busy}
+              title="Halts every new entry immediately, desk-wide. Protective exits are never refused — the switch stops entries, never safety."
+              onClick={throwSwitch}
+            >
+              {busy ? "…" : "HALT ENTRIES"}
+            </button>
+          )}
+        </span>
+      </div>
+      {arming && (
+        <form
+          className="mt-2 flex flex-wrap items-center gap-2 border-t border-hair pt-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (armNote.trim() && !busy) void reArm();
+          }}
+        >
+          <label className="font-mono text-[0.7rem] uppercase tracking-[0.12em] text-ink-soft" htmlFor="ks-note">
+            Why re-arm
+          </label>
+          <input
+            id="ks-note"
+            className={inputClass + " min-w-[24ch] flex-1"}
+            value={armNote}
+            onChange={(e) => setArmNote(e.target.value)}
+            placeholder="the audit row carries this sentence — required"
+            autoFocus
+          />
+          <button type="submit" className={btnClass} disabled={busy || armNote.trim().length === 0}>
+            {busy ? "…" : "Confirm re-arm"}
+          </button>
+          <button
+            type="button"
+            className="rounded-sm border border-rule px-3 py-1.5 font-mono text-xs text-ink-soft transition hover:text-ink"
+            onClick={() => {
+              setArming(false);
+              setError(null);
+            }}
+          >
+            Cancel
+          </button>
+        </form>
+      )}
+      {error && <p className="mt-1 font-mono text-[0.7rem] text-down">{error}</p>}
+    </div>
+  );
+}
+
+export const KillSwitchControlForTest = KillSwitchControl;
+
+
+/* ---- The lifecycle registry ----------------------------------------------
+
+   Every version with its state, evidence chain, and paper track record. A
+   version in paper carries the approval card the design mandates: human,
+   one click, re-basing impossible. The card shows the exact record the human
+   approves and the fingerprint that freezes it — a confirmation whose inputs
+   moved answers 409, rendered here as the honest error state, never retried
+   silently. candidate_live → live is never offered: the mandate is M5 and an
+   offer the registry must refuse would be a lie in chrome. */
+
+const STATE_TONE: Record<string, BadgeTone> = {
+  research: "muted",
+  validated: "muted",
+  paper: "up",
+  candidate_live: "up",
+  live: "up",
+};
+
+function fmtPnl(v: number | null): string {
+  if (v === null) return "—";
+  return (v >= 0 ? "+" : "") + v.toFixed(2);
+}
+
+function ApprovalCard({
+  version,
+  onChanged,
+}: {
+  version: TradingRegistryVersion;
+  onChanged: () => void;
+}) {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const rec = version.track_record;
+
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    setConflict(false);
+    try {
+      const result = await approveVersion(version.version_id, version.fingerprint, note.trim());
+      setDone(result.state);
+      onChanged();
+    } catch (e) {
+      if (isConflict(e)) {
+        setConflict(true);
+      }
+      setError(apiError(e, "The approval could not be written."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (done !== null) {
+    return (
+      <div className="border-l-2 border-up bg-up-tint px-3 py-2 font-mono text-xs text-up">
+        approved — state is now {done}
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-l-2 border-olive bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-xs">
+        <span className="text-[0.7rem] uppercase tracking-[0.14em] text-ink-faint">
+          Approval card — paper → candidate_live
+        </span>
+        <span className="tabular-nums text-ink" title="closed paper trades of this version">
+          {rec.trades_count} trades
+        </span>
+        <span className={"tabular-nums " + ((rec.realized_pnl ?? 0) >= 0 ? "text-up" : "text-down")} title="realized pnl, net of fees">
+          {fmtPnl(rec.realized_pnl)}
+        </span>
+        <span className="tabular-nums text-ink-soft" title="days between first and last exit">
+          {rec.span_days === null ? "—" : rec.span_days.toFixed(1) + "d"} span
+        </span>
+        <span
+          className={"tabular-nums " + (rec.drift_breaches > 0 ? "text-warn" : "text-ink-soft")}
+          title="divergence-budget breaches on the events tape"
+        >
+          drift {rec.drift_breaches}/{rec.drift_fills_measured}
+        </span>
+      </div>
+      <div className="mt-1 font-mono text-[0.7rem] text-ink-faint">
+        fingerprint <span className="text-ink-soft">{version.fingerprint}</span> — freezes exactly this record;
+        if anything moves, the confirmation is refused and the new record must be reviewed
+      </div>
+      <form
+        className="mt-2 flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!busy) void confirm();
+        }}
+      >
+        <input
+          className={inputClass + " min-w-[20ch] flex-1"}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="note for the approval row (optional)"
+          aria-label="approval note"
+        />
+        <button type="submit" className={btnClass} disabled={busy}>
+          {busy ? "…" : "Confirm approval"}
+        </button>
+      </form>
+      {error && (
+        <p className="mt-1 font-mono text-[0.7rem] text-down">
+          {conflict ? "inputs moved — review the new track record: " : ""}
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export const ApprovalCardForTest = ApprovalCard;
+
+export function RegistrySection({
+  versions,
+  error,
+  onChanged,
+}: {
+  versions: TradingRegistryVersion[] | null;
+  error: string | null;
+  onChanged: () => void;
+}) {
+  if (error) return <p className="text-down">{error}</p>;
+  if (versions === null) return <p className="text-ink-soft">Loading…</p>;
+  if (versions.length === 0) {
+    return (
+      <EmptyState title="The lifecycle owns nothing yet">
+        No strategy version is registered. Versions appear here in state research the moment one is
+        registered, move to paper on the validation gate&apos;s evidence alone, and reach candidate_live
+        only through a human approval card — never automatically. Empty is the gate working, not a
+        missing panel.
+      </EmptyState>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <div className={cardClass + " overflow-x-auto"}>
+        <table className="w-full border-collapse font-mono text-xs">
+          <thead>
+            <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
+              <th className="px-3 py-1.5 text-left font-medium">Version</th>
+              <th className="px-3 py-1.5 text-left font-medium">State</th>
+              <th className="px-3 py-1.5 text-left font-medium">TF</th>
+              <th className="px-3 py-1.5 text-left font-medium">Universe</th>
+              <th className="px-3 py-1.5 text-right font-medium">Trades</th>
+              <th className="px-3 py-1.5 text-right font-medium">PnL</th>
+              <th className="px-3 py-1.5 text-left font-medium">Evidence</th>
+              <th className="px-3 py-1.5 text-left font-medium">Since</th>
+            </tr>
+          </thead>
+          <tbody>
+            {versions.map((v) => (
+              <tr key={v.version_id} className="border-b border-hair last:border-b-0">
+                <td className="px-3 py-1 text-ink" title={`${v.name} — code ${v.code_hash}`}>
+                  {v.strategy_key}-v{v.version}
+                </td>
+                <td className="px-3 py-1">
+                  <Badge tone={STATE_TONE[v.state] ?? "muted"}>{v.state}</Badge>
+                </td>
+                <td className="px-3 py-1 text-ink-soft">{v.timeframe}</td>
+                <td className="px-3 py-1 text-ink-soft">{v.universe.join(", ")}</td>
+                <td className="px-3 py-1 text-right tabular-nums text-ink">{v.track_record.trades_count}</td>
+                <td
+                  className={
+                    "px-3 py-1 text-right tabular-nums " + ((v.track_record.realized_pnl ?? 0) >= 0 ? "text-up" : "text-down")
+                  }
+                >
+                  {fmtPnl(v.track_record.realized_pnl)}
+                </td>
+                <td className="px-3 py-1 text-ink-faint">{v.state_evidence || "—"}</td>
+                <td className="px-3 py-1 text-ink-faint">{v.state_since ? fmtDay(v.state_since) : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {versions
+        .filter((v) => v.pending_transition === "candidate_live")
+        .map((v) => (
+          <ApprovalCard key={v.version_id} version={v} onChanged={onChanged} />
+        ))}
+    </div>
+  );
+}
+
+export const RegistrySectionForTest = RegistrySection;
+
+
 /* ---- The page ------------------------------------------------------------ */
 
 export default function Trading() {
@@ -1093,6 +1425,10 @@ export default function Trading() {
   const [strategiesError, setStrategiesError] = useState<string | null>(null);
   const [rails, setRails] = useState<TradingRailsStatus | null>(null);
   const [divergence, setDivergence] = useState<TradingDivergenceStatus | null>(null);
+  const [registry, setRegistry] = useState<TradingRegistryVersion[] | null>(null);
+  const [registryError, setRegistryError] = useState<string | null>(null);
+  const [railsReloadKey, setRailsReloadKey] = useState(0);
+  const [registryReloadKey, setRegistryReloadKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -1118,6 +1454,9 @@ export default function Trading() {
         /* the strip is rail evidence; its failure renders as no strip,
            never as a blank page over the positions beside it */
       });
+    getTradingRegistry()
+      .then((v) => alive && setRegistry(v))
+      .catch((e) => alive && setRegistryError(apiError(e, "The lifecycle registry could not be loaded.")));
     getRecentTrades()
       .then((t) => alive && setTrades(t))
       .catch(() => {
@@ -1133,11 +1472,18 @@ export default function Trading() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [railsReloadKey, registryReloadKey]);
 
   return (
     <div className="space-y-8">
       <EngineHeader status={status} error={statusError} />
+      {rails !== null && (
+        <KillSwitchControl
+          tripped={rails.manual_killswitch}
+          note={rails.manual_killswitch_note}
+          onChanged={() => setRailsReloadKey((k) => k + 1)}
+        />
+      )}
 
       <Section
         title="Positions & risk"
@@ -1152,6 +1498,17 @@ export default function Trading() {
           engineState={status?.engine_state ?? null}
           error={positionsError}
           budgets={divergenceBudgetsOf(divergence)}
+        />
+      </Section>
+
+      <Section
+        title="Lifecycle"
+        hint="Every registered strategy version with its state, evidence chain and paper track record. Versions in paper carry the approval card — human, one click, re-basing impossible. A confirmation whose inputs moved is refused, and the new record must be reviewed."
+      >
+        <RegistrySection
+          versions={registry}
+          error={registryError}
+          onChanged={() => setRegistryReloadKey((k) => k + 1)}
         />
       </Section>
 

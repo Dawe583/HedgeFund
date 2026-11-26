@@ -1559,6 +1559,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trading/kill-switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Kill Switch
+         * @description The manual kill-switch — write path of the row the kernel polls
+         *     fail-closed at entry cadence (trading/risk.py `__killswitch` on
+         *     BotStatus; the desk's manual_halt_check reads it before every entry).
+         *
+         *     Direction is asymmetric on purpose: throwing the switch ON is always
+         *     allowed and immediate, note optional — in that direction speed beats
+         *     paperwork, and halting is the safe failure. Re-arming (enabled=false)
+         *     is the dangerous direction, so it demands the operator's sentence: the
+         *     note is mandatory, enforced here server-side, and both directions write
+         *     a risk_events audit row — the control tape and the rail tape are one
+         *     tape, so a veto read next to the switch's throw explains itself without
+         *     a second panel. Entries halt immediately; protective exits always keep
+         *     flowing, because the switch refuses entries, never safety.
+         */
+        post: operations["set_kill_switch_api_trading_kill_switch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trading/positions": {
         parameters: {
             query?: never;
@@ -1625,6 +1657,59 @@ export interface paths {
         get: operations["trading_rails_api_trading_rails_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trading/registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trading Registry
+         * @description Every registered strategy version with state, evidence chain, paper
+         *     track record and staleness fingerprint. Empty is the first-class answer:
+         *     with zero validated strategies the lifecycle owns nothing — the gate
+         *     working, not a missing panel.
+         */
+        get: operations["trading_registry_api_trading_registry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trading/registry/{version_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Version
+         * @description The paper → candidate_live approval card, exactly as design §6 layer 1
+         *     demands: human, mandatory, one click, re-basing impossible.
+         *
+         *     The card's contract: the body carries the fingerprint GET /registry
+         *     served beside the track record the human reviewed. The fingerprint is
+         *     recomputed from CURRENT rows and compared — a mismatch is 409, "inputs
+         *     moved — review the new track record", and nothing is written. On match
+         *     the approval row is written first (the durable assent, the audit) and
+         *     the registry's transition() applies its own guards; a refusal there is
+         *     surfaced honestly as 409 with the guard's reason, and both writes roll
+         *     back together — a half-written approval would be a forged card.
+         */
+        post: operations["approve_version_api_trading_registry__version_id__approve_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2064,6 +2149,25 @@ export interface components {
             name: string;
             /** Pct */
             pct: number;
+        };
+        /**
+         * ApproveRequest
+         * @description POST /api/trading/registry/<id>/approve body. `fingerprint` is the
+         *     exact digest GET /api/trading/registry served with the track record the
+         *     human reviewed — the card's staleness check. If ANY input moved since
+         *     (a trade settled, drift counters ticked, a validation landed) the digest
+         *     no longer matches and the write is refused 409: re-basing is impossible,
+         *     the human reviews the NEW track record. `note` is the operator's sentence
+         *     on the approval row itself.
+         */
+        ApproveRequest: {
+            /** Fingerprint */
+            fingerprint: string;
+            /**
+             * Note
+             * @default
+             */
+            note?: string;
         };
         /**
          * ArrivedPosition
@@ -4133,6 +4237,35 @@ export interface components {
             type: string | null;
         };
         /**
+         * KillSwitchRequest
+         * @description POST /api/trading/kill-switch body. `enabled` is the direction of the
+         *     throw: true halts entries desk-wide immediately (protective exits keep
+         *     flowing — the switch refuses entries, never safety), false re-arms.
+         *     `note` is optional going ON — speed beats paperwork in that direction —
+         *     and MANDATORY coming OFF: re-arming a halted desk is the dangerous
+         *     direction, and the audit row deserves the operator's own sentence for
+         *     why, enforced server-side as a 422, never by browser chrome alone.
+         */
+        KillSwitchRequest: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Note
+             * @default
+             */
+            note?: string;
+        };
+        /**
+         * KillSwitchState
+         * @description The switch as persisted — the same truth GET /rails reads live.
+         */
+        KillSwitchState: {
+            /** Note */
+            note: string;
+            /** Tripped */
+            tripped: boolean;
+        };
+        /**
          * LiabilityBalanceCreate
          * @description Payload to create a balance. liability_id comes from the URL.
          */
@@ -5498,6 +5631,22 @@ export interface components {
             known_countries: components["schemas"]["TaxCountryDefault"][];
         };
         /**
+         * TradingApprovalResult
+         * @description What one POST …/approve produced: the approval row the human's assent
+         *     became, the new state row when the registry's guards let it through,
+         *     and the fingerprint the confirmation stood on.
+         */
+        TradingApprovalResult: {
+            /** Approval Id */
+            approval_id: number;
+            /** Evidence */
+            evidence: string;
+            /** Fingerprint */
+            fingerprint: string;
+            /** State */
+            state: string;
+        };
+        /**
          * TradingBotDivergence
          * @description One bot's divergence picture: the declared budget, the live feed
          *     counters, the aggregated per-fill evidence, and the distributional
@@ -5785,6 +5934,56 @@ export interface components {
             /** Vetoes Today */
             vetoes_today: components["schemas"]["TradingRiskEvent"][];
         };
+        /**
+         * TradingRegistry
+         * @description GET /api/trading/registry — every registered version. Empty is the
+         *     first-class answer: with zero validated strategies the lifecycle owns
+         *     nothing, and the registry that shows nothing is the gate working.
+         */
+        TradingRegistry: {
+            /** Versions */
+            versions: components["schemas"]["TradingRegistryVersion"][];
+        };
+        /**
+         * TradingRegistryVersion
+         * @description One strategy version with its lifecycle state, the evidence chain
+         *     behind it, the paper track record, and the staleness fingerprint the
+         *     approval flow consumes. `fingerprint` digests the inputs the approval
+         *     card displays; a card confirmed after they moved answers 409.
+         */
+        TradingRegistryVersion: {
+            /** Code Hash */
+            code_hash: string;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Name */
+            name: string;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Pending Transition */
+            pending_transition: string | null;
+            /** State */
+            state: string;
+            /** State Evidence */
+            state_evidence: string;
+            /** State Since */
+            state_since: string | null;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Timeframe */
+            timeframe: string;
+            track_record: components["schemas"]["TradingTrackRecord"];
+            /** Universe */
+            universe: string[];
+            /** Validation Id */
+            validation_id: number | null;
+            /** Version */
+            version: number;
+            /** Version Id */
+            version_id: number;
+        };
         /** TradingRiskEvent */
         TradingRiskEvent: {
             /** Bot */
@@ -5910,6 +6109,30 @@ export interface components {
             symbols: string[];
             /** Timeframe */
             timeframe: string;
+        };
+        /**
+         * TradingTrackRecord
+         * @description The paper track record summary the approval card carries (design §6):
+         *     duration, trades, realized pnl — plus the drift counters, the live
+         *     evidence of whether paper execution drifts from the contract. Explicit
+         *     nulls when nothing has settled yet, never zeros: zero trades is a fact,
+         *     zero pnl over zero trades would be a fiction.
+         */
+        TradingTrackRecord: {
+            /** Drift Breaches */
+            drift_breaches: number;
+            /** Drift Fills Measured */
+            drift_fills_measured: number;
+            /** First Exit At */
+            first_exit_at: string | null;
+            /** Last Exit At */
+            last_exit_at: string | null;
+            /** Realized Pnl */
+            realized_pnl: number | null;
+            /** Span Days */
+            span_days: number | null;
+            /** Trades Count */
+            trades_count: number;
         };
         /** TradingTradeEvidence */
         TradingTradeEvidence: {
@@ -9473,6 +9696,39 @@ export interface operations {
             };
         };
     };
+    set_kill_switch_api_trading_kill_switch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KillSwitchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KillSwitchState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_positions_api_trading_positions_get: {
         parameters: {
             query?: never;
@@ -9529,6 +9785,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TradingRailsStatus"];
+                };
+            };
+        };
+    };
+    trading_registry_api_trading_registry_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingRegistry"];
+                };
+            };
+        };
+    };
+    approve_version_api_trading_registry__version_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingApprovalResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

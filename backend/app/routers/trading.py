@@ -22,7 +22,12 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.schemas_trading import (
+    ApproveRequest,
+    KillSwitchRequest,
+    KillSwitchState,
+    TradingApprovalResult,
     TradingClosedTrade,
+    TradingRegistry,
     TradingDivergenceStatus,
     TradingPosition,
     TradingRunDetail,
@@ -33,10 +38,14 @@ from app.schemas_trading import (
 )
 from trading.config import get_settings
 from trading.models import (
+    Approval,
     BacktestRun,
     BacktestValidation,
     BotStatus,
     OpenPosition,
+    RiskEvent,
+    StrategyState,
+    StrategyVersion,
     Trade,
     make_engine,
 )
@@ -659,3 +668,328 @@ def trading_divergence(db: Session = Depends(get_trading_db)) -> dict:
         breach_events = []
 
     return {"bots": bots, "breach_events": breach_events}
+
+
+# --------------------------------------------------------------------------
+# M4 — the first write paths of this router. Everything above describes the
+# engine; everything below is the operator's hands on it. Two rules shape
+# both endpoints: a control that cannot audit itself is not a control, and
+# a refusal is an answer, never an exception the client has to guess at.
+
+
+def _require_trading_tables(db: Session) -> None:
+    """Write endpoints fail closed when the schema is absent — unlike the
+    read endpoints, which degrade to empty, a write into a database that
+    cannot hold it is not an honest offline answer but a 503."""
+    if not _tables_present(db):
+        raise HTTPException(
+            status_code=503,
+            detail="no trading tables in this database — the control surface has nowhere durable to write",
+        )
+
+
+@router.post("/kill-switch", response_model=KillSwitchState)
+def set_kill_switch(req: KillSwitchRequest, db: Session = Depends(get_trading_db)) -> dict:
+    """The manual kill-switch — write path of the row the kernel polls
+    fail-closed at entry cadence (trading/risk.py `__killswitch` on
+    BotStatus; the desk's manual_halt_check reads it before every entry).
+
+    Direction is asymmetric on purpose: throwing the switch ON is always
+    allowed and immediate, note optional — in that direction speed beats
+    paperwork, and halting is the safe failure. Re-arming (enabled=false)
+    is the dangerous direction, so it demands the operator's sentence: the
+    note is mandatory, enforced here server-side, and both directions write
+    a risk_events audit row — the control tape and the rail tape are one
+    tape, so a veto read next to the switch's throw explains itself without
+    a second panel. Entries halt immediately; protective exits always keep
+    flowing, because the switch refuses entries, never safety."""
+    _require_trading_tables(db)
+    note = req.note.strip()
+    if not req.enabled and not note:
+        raise HTTPException(
+            status_code=422,
+            detail="re-arming the kill-switch requires a note — the audit row deserves the operator's own sentence for why",
+        )
+    ks_row = db.get(BotStatus, "__killswitch")
+    if ks_row is None:
+        ks_row = BotStatus(name="__killswitch", running=True, mode="risk", note="")
+        db.add(ks_row)
+    ks_row.running = not req.enabled
+    ks_row.note = note or ("manual kill-switch " + ("ON" if req.enabled else "OFF"))
+    # the audit seam: risk_events with rail manual_killswitch, decision
+    # tripped/cleared, bot __control__ — the control surface as its own
+    # actor on the same tape the rails write. Chosen over a separate
+    # control_audit table because the events strip already renders this
+    # table live, and the one-tape ordering is the honest provenance.
+    db.add(
+        RiskEvent(
+            bot="__control__",
+            symbol="",
+            rail="manual_killswitch",
+            decision="tripped" if req.enabled else "cleared",
+            inputs_json=json.dumps(
+                {
+                    "actor": "operator-ui",
+                    "note": note,
+                    "direction": "on" if req.enabled else "off",
+                }
+            ),
+        )
+    )
+    db.commit()
+    return {"tripped": req.enabled, "note": ks_row.note}
+
+
+# ---- the lifecycle registry surface --------------------------------------
+
+
+def _bot_name(strategy_key: str, version: int) -> str:
+    return f"{strategy_key}-v{version}"
+
+
+def _track_record(db: Session, bot: str) -> dict:
+    """The paper track record of one registry-booted bot: every closed
+    paper trade of the `<key>-v<N>` name. Explicit nulls over an empty set —
+    zero trades is a fact, zero pnl over zero trades would be a fiction."""
+    try:
+        rows = (
+            db.execute(
+                select(Trade).where(Trade.bot == bot).order_by(Trade.exit_time)
+            )
+            .scalars()
+            .all()
+        )
+    except (OperationalError, SQLAlchemyError):
+        rows = []
+    if not rows:
+        return {
+            "trades_count": 0,
+            "realized_pnl": None,
+            "span_days": None,
+            "first_exit_at": None,
+            "last_exit_at": None,
+            "drift_fills_measured": 0,
+            "drift_breaches": 0,
+        }
+    measured = 0
+    breaches = 0
+    for t in rows:
+        for v in (t.entry_dev_ticks, t.exit_dev_ticks):
+            if v is not None:
+                measured += 1
+        # breach accounting is the budget's business; here the card counts
+        # fills whose measured dev exists — the budget comparison itself is
+        # the divergence surface's job, and double-counting it here would
+        # invent precision the row does not carry. Drift breaches are read
+        # from the events tape instead (below), the rail's own verdicts.
+    try:
+        breach_rows = db.execute(
+            select(RiskEvent.id).where(
+                RiskEvent.bot == bot, RiskEvent.rail == "divergence_budget"
+            )
+        ).all()
+        breaches = len(breach_rows)
+    except (OperationalError, SQLAlchemyError):
+        breaches = 0
+    first, last = rows[0].exit_time, rows[-1].exit_time
+    span = (last - first).total_seconds() / 86400.0 if first and last else None
+    return {
+        "trades_count": len(rows),
+        "realized_pnl": sum(t.pnl for t in rows),
+        "span_days": span,
+        "first_exit_at": first,
+        "last_exit_at": last,
+        "drift_fills_measured": measured,
+        "drift_breaches": breaches,
+    }
+
+
+def _fingerprint_of(
+    version_id: int,
+    state: str,
+    validation_id: int | None,
+    record: dict,
+    code_hash: str,
+) -> str:
+    """The staleness fingerprint: one digest over every input the approval
+    card displays. ANY movement — a trade settled, a breach recorded, the
+    state row advanced — changes the digest, and a confirmation carrying
+    the old digest is a 409. Re-basing is impossible because the digest is
+    recomputed, never stored: the card cannot be tricked into approving a
+    snapshot of itself."""
+    import hashlib
+
+    payload = {
+        "version_id": version_id,
+        "state": state,
+        "validation_id": validation_id,
+        "code_hash": code_hash,
+        "trades_count": record["trades_count"],
+        "realized_pnl": record["realized_pnl"],
+        "span_days": record["span_days"],
+        "last_exit_at": record["last_exit_at"].isoformat() if record["last_exit_at"] else None,
+        "drift_breaches": record["drift_breaches"],
+        "drift_fills_measured": record["drift_fills_measured"],
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
+def _validation_ref(db: Session, version_id: int) -> int | None:
+    """The validation row behind research→validated, parsed out of the state
+    chain's evidence — the evidence string is the chain of custody, and the
+    card quotes it rather than re-deriving it."""
+    rows = (
+        db.execute(
+            select(StrategyState)
+            .where(StrategyState.version_id == version_id)
+            .order_by(StrategyState.id)
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        if row.evidence.startswith("validation:"):
+            try:
+                return int(row.evidence.split(":", 1)[1])
+            except ValueError:
+                return None
+    return None
+
+
+def _registry_payload(db: Session) -> list[dict]:
+    from trading.models import Strategy as StrategyRow
+
+    strategies = {s.id: s for s in db.execute(select(StrategyRow)).scalars().all()}
+    versions = db.execute(select(StrategyVersion)).scalars().all()
+    out: list[dict] = []
+    for v in sorted(versions, key=lambda x: x.id):
+        strategy = strategies.get(v.strategy_id)
+        if strategy is None:
+            continue
+        states = (
+            db.execute(
+                select(StrategyState)
+                .where(StrategyState.version_id == v.id)
+                .order_by(StrategyState.id)
+            )
+            .scalars()
+            .all()
+        )
+        if not states:
+            continue
+        latest = states[-1]
+        validation_id = _validation_ref(db, v.id)
+        bot = _bot_name(strategy.key, v.version)
+        record = _track_record(db, bot)
+        fingerprint = _fingerprint_of(v.id, latest.state, validation_id, record, v.code_hash)
+        out.append(
+            {
+                "version_id": v.id,
+                "strategy_key": strategy.key,
+                "name": strategy.name,
+                "version": v.version,
+                "state": latest.state,
+                "params": json.loads(v.params_json or "{}"),
+                "timeframe": v.timeframe,
+                "universe": json.loads(v.universe_json or "[]"),
+                "code_hash": v.code_hash,
+                "validation_id": validation_id,
+                "state_since": latest.created_at,
+                "state_evidence": latest.evidence or "",
+                "track_record": record,
+                "fingerprint": fingerprint,
+                # the only human-gated transition the design opens in this
+                # milestone: paper → candidate_live. candidate_live → live is
+                # structurally impossible in M3 (the mandate is M5), so no
+                # card is ever offered for it — an offer the registry must
+                # refuse would be a lie in chrome.
+                "pending_transition": "candidate_live" if latest.state == "paper" else None,
+            }
+        )
+    return out
+
+
+@router.get("/registry", response_model=TradingRegistry)
+def trading_registry(db: Session = Depends(get_trading_db)) -> dict:
+    """Every registered strategy version with state, evidence chain, paper
+    track record and staleness fingerprint. Empty is the first-class answer:
+    with zero validated strategies the lifecycle owns nothing — the gate
+    working, not a missing panel."""
+    if not _tables_present(db):
+        return {"versions": []}
+    try:
+        return {"versions": _registry_payload(db)}
+    except (OperationalError, SQLAlchemyError):
+        return {"versions": []}
+
+
+@router.post("/registry/{version_id}/approve", response_model=TradingApprovalResult)
+def approve_version(version_id: int, req: ApproveRequest, db: Session = Depends(get_trading_db)) -> dict:
+    """The paper → candidate_live approval card, exactly as design §6 layer 1
+    demands: human, mandatory, one click, re-basing impossible.
+
+    The card's contract: the body carries the fingerprint GET /registry
+    served beside the track record the human reviewed. The fingerprint is
+    recomputed from CURRENT rows and compared — a mismatch is 409, "inputs
+    moved — review the new track record", and nothing is written. On match
+    the approval row is written first (the durable assent, the audit) and
+    the registry's transition() applies its own guards; a refusal there is
+    surfaced honestly as 409 with the guard's reason, and both writes roll
+    back together — a half-written approval would be a forged card."""
+    _require_trading_tables(db)
+    from trading.registry import TransitionRefused, transition
+
+    try:
+        rows = _registry_payload(db)
+    except (OperationalError, SQLAlchemyError):
+        rows = []
+    row = next((r for r in rows if r["version_id"] == version_id), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"strategy version {version_id} is not registered")
+    if row["pending_transition"] != "candidate_live":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"version {version_id} is in state {row['state']!r} — the only approvable card "
+                f"is paper → candidate_live, offered only on paper versions"
+            ),
+        )
+    if req.fingerprint != row["fingerprint"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "inputs moved — the track record, state or drift counters changed since this "
+                "card was rendered. Review the new track record; re-basing is impossible."
+            ),
+        )
+    note = req.note.strip()
+    db.add(
+        Approval(
+            version_id=version_id,
+            transition="paper->candidate_live",
+            approved_by="operator-ui",
+            note=note,
+        )
+    )
+    db.flush()
+    try:
+        state_row = transition(
+            db, version_id, "candidate_live", note=note or "approval card confirmed"
+        )
+    except TransitionRefused as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"the registry refused the transition: {exc}") from exc
+    db.commit()
+    evidence_id = 0
+    if ":" in state_row.evidence:
+        try:
+            evidence_id = int(state_row.evidence.split(":", 1)[1])
+        except ValueError:
+            evidence_id = 0
+    return {
+        "approval_id": evidence_id,
+        "state": state_row.state,
+        "evidence": state_row.evidence,
+        "fingerprint": req.fingerprint,
+    }

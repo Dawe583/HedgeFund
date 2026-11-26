@@ -286,3 +286,104 @@ class TradingDivergenceStatus(BaseModel):
 
     bots: list[TradingBotDivergence]
     breach_events: list[TradingRiskEvent]
+
+
+# --------------------------------------------------------------------------
+# M4 control surfaces — the FIRST write endpoints of the trading router.
+# The read endpoints above describe the engine; the models below describe
+# the operator's hands on it. A control model that cannot audit itself is
+# not a control.
+
+
+class KillSwitchRequest(BaseModel):
+    """POST /api/trading/kill-switch body. `enabled` is the direction of the
+    throw: true halts entries desk-wide immediately (protective exits keep
+    flowing — the switch refuses entries, never safety), false re-arms.
+    `note` is optional going ON — speed beats paperwork in that direction —
+    and MANDATORY coming OFF: re-arming a halted desk is the dangerous
+    direction, and the audit row deserves the operator's own sentence for
+    why, enforced server-side as a 422, never by browser chrome alone."""
+
+    enabled: bool
+    note: str = ""
+
+
+class KillSwitchState(BaseModel):
+    """The switch as persisted — the same truth GET /rails reads live."""
+
+    tripped: bool
+    note: str
+
+
+class TradingApprovalResult(BaseModel):
+    """What one POST …/approve produced: the approval row the human's assent
+    became, the new state row when the registry's guards let it through,
+    and the fingerprint the confirmation stood on."""
+
+    approval_id: int
+    state: str
+    evidence: str
+    fingerprint: str
+
+
+class ApproveRequest(BaseModel):
+    """POST /api/trading/registry/<id>/approve body. `fingerprint` is the
+    exact digest GET /api/trading/registry served with the track record the
+    human reviewed — the card's staleness check. If ANY input moved since
+    (a trade settled, drift counters ticked, a validation landed) the digest
+    no longer matches and the write is refused 409: re-basing is impossible,
+    the human reviews the NEW track record. `note` is the operator's sentence
+    on the approval row itself."""
+
+    fingerprint: str
+    note: str = ""
+
+
+class TradingTrackRecord(BaseModel):
+    """The paper track record summary the approval card carries (design §6):
+    duration, trades, realized pnl — plus the drift counters, the live
+    evidence of whether paper execution drifts from the contract. Explicit
+    nulls when nothing has settled yet, never zeros: zero trades is a fact,
+    zero pnl over zero trades would be a fiction."""
+
+    trades_count: int
+    realized_pnl: float | None
+    span_days: float | None
+    first_exit_at: dt.datetime | None
+    last_exit_at: dt.datetime | None
+    drift_fills_measured: int
+    drift_breaches: int
+
+
+class TradingRegistryVersion(BaseModel):
+    """One strategy version with its lifecycle state, the evidence chain
+    behind it, the paper track record, and the staleness fingerprint the
+    approval flow consumes. `fingerprint` digests the inputs the approval
+    card displays; a card confirmed after they moved answers 409."""
+
+    version_id: int
+    strategy_key: str
+    name: str
+    version: int
+    state: str
+    params: dict[str, Any]
+    timeframe: str
+    universe: list[str]
+    code_hash: str
+    validation_id: int | None
+    state_since: dt.datetime | None
+    state_evidence: str
+    track_record: TradingTrackRecord
+    fingerprint: str
+    # the approval card this version is eligible for — "candidate_live" on a
+    # paper version, null everywhere else. Null is the UI's cue to render a
+    # row, never a card.
+    pending_transition: str | None
+
+
+class TradingRegistry(BaseModel):
+    """GET /api/trading/registry — every registered version. Empty is the
+    first-class answer: with zero validated strategies the lifecycle owns
+    nothing, and the registry that shows nothing is the gate working."""
+
+    versions: list[TradingRegistryVersion]

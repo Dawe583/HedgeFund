@@ -153,3 +153,68 @@ export type TradingBotDivergence = Schemas["TradingBotDivergence"];
 export async function getTradingDivergence(): Promise<TradingDivergenceStatus> {
   return (await api.get<TradingDivergenceStatus>("/api/trading/divergence")).data;
 }
+
+/* ---- M4 control surfaces: the first write paths of this client.
+
+   The read endpoints above describe the engine; the functions below are the
+   operator's hands on it. Both write paths carry the same honesty contract
+   as the backend: the kill-switch audit tape is server-side and unconditional
+   (this client cannot forget it), and the approval card's fingerprint is the
+   exact digest GET /registry served — never recomputed client-side, because
+   a client that recomputes inputs is a client that can drift from what was
+   on the screen. */
+
+/** The kill-switch as persisted. `tripped` true means entries are halted
+    desk-wide RIGHT NOW — protective exits always keep flowing, the switch
+    refuses entries, never safety. */
+export type KillSwitchState = Schemas["KillSwitchState"];
+
+/** Throw the manual kill-switch. `enabled: true` halts entries immediately
+    and needs no note — in that direction speed beats paperwork. Re-arming
+    (`enabled: false`) is the dangerous direction and the backend refuses
+    (422) without a non-empty note: the audit row deserves the operator's
+    own sentence for why. */
+export async function setKillSwitch(enabled: boolean, note: string): Promise<KillSwitchState> {
+  return (await api.post<KillSwitchState>("/api/trading/kill-switch", { enabled, note })).data;
+}
+
+/** One registry version: state, evidence chain, paper track record, and the
+    staleness fingerprint the approval flow consumes. */
+export type TradingRegistryVersion = Schemas["TradingRegistryVersion"];
+export type TradingTrackRecord = Schemas["TradingTrackRecord"];
+export type TradingApprovalResult = Schemas["TradingApprovalResult"];
+
+export async function getTradingRegistry(): Promise<TradingRegistryVersion[]> {
+  return (await api.get<Schemas["TradingRegistry"]>("/api/trading/registry")).data.versions;
+}
+
+/** Confirm the paper → candidate_live approval card. `fingerprint` must be
+    the digest the registry served WITH the track record the human reviewed:
+    if any input moved since, the backend answers 409 ("inputs moved") and
+    nothing is written — re-basing is impossible, the human reviews the new
+    track record. Callers distinguish the 409 by `axios` status, not by
+    parsing the sentence. */
+export async function approveVersion(
+  versionId: number,
+  fingerprint: string,
+  note: string,
+): Promise<TradingApprovalResult> {
+  return (
+    await api.post<TradingApprovalResult>(`/api/trading/registry/${versionId}/approve`, {
+      fingerprint,
+      note,
+    })
+  ).data;
+}
+
+/** True when a failure is the approval flow's staleness refusal — the 409
+    the design mandates, distinct from a network or validation failure. */
+export function isConflict(e: unknown): boolean {
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    "response" in e &&
+    typeof (e as { response?: { status?: number } }).response?.status === "number" &&
+    (e as { response: { status: number } }).response.status === 409
+  );
+}

@@ -200,3 +200,29 @@ Slice-5 implementation notes (landed 2026-11-26):
   racing nautilus's construction-time `get_event_loop` — never the tests'
   content. `tests_trading/conftest.py` now guarantees every test a fresh
   main-thread loop; 250/250 pass in the combination run.
+
+M4 implementation notes (landed 2026-11-26):
+- **The first write paths of the web router are the two control surfaces** —
+  `POST /api/trading/kill-switch` and `POST /api/trading/registry/<id>/approve`,
+  plus the read surfaces `GET /api/trading/registry`. Everything else in the
+  router stays read-only; the write endpoints fail closed with 503 on a
+  database without the trading tables (a read degrades to empty, a write
+  cannot honestly degrade).
+- **The audit seam for the kill-switch is `risk_events`**, rail
+  `manual_killswitch`, decision `tripped`/`cleared`, bot `__control__` — one
+  tape for the rails and the hand on them, so the existing events strip
+  renders control actions beside rail firings in time order without a second
+  panel. Direction is asymmetric on purpose: ON is one click, note optional
+  (halting is the safe failure, speed beats paperwork); re-arming demands a
+  non-empty note enforced server-side as 422 — browser chrome is convenience,
+  never the gate.
+- **The approval card's fingerprint is recomputed, never stored**: sha256
+  over version id, state, validation ref, code hash, and the whole track
+  record summary (trades count, realized pnl, span, last exit, drift
+  counters). A confirmation whose inputs moved is 409 with nothing written;
+  a guard refusal from `registry.transition()` is also 409 with the guard's
+  reason, approval row and state row rolling back together. The approval row
+  itself (`approvals`, written before the transition) is the audit — the
+  human gate needs no second tape. `candidate_live → live` is never offered
+  in the UI: the mandate is M5, and an offer the registry must refuse would
+  be a lie in chrome.

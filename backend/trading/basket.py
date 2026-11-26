@@ -143,6 +143,9 @@ def evaluate_basket(
         "seed": seed,
         "reasons_json": json.dumps(gate["reasons"]),
         "elapsed_s": elapsed,
+        "wf_windows_json": json.dumps(
+            core.get("validation_payload", {}).get("walk_forward", {}).get("windows", [])
+        ),
         "legs_json": json.dumps(legs, sort_keys=True),
     }
     row_id = ledger_append(conn, row)

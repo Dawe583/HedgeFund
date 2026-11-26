@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS search_ledger (
     seed INTEGER NOT NULL,
     reasons_json TEXT NOT NULL,
     elapsed_s REAL,
-    legs_json TEXT
+    legs_json TEXT,
+    wf_windows_json TEXT
 )
 """
 
@@ -88,6 +89,11 @@ def open_ledger(db_path: str) -> sqlite3.Connection:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(search_ledger)")}
     if "legs_json" not in cols:
         conn.execute("ALTER TABLE search_ledger ADD COLUMN legs_json TEXT")
+    if "wf_windows_json" not in cols:
+        # the walk-forward window series — edge decay is the program's
+        # regime question (regime-architecture-2026-11-26) and a series
+        # that is computed but never persisted cannot be mined afterwards
+        conn.execute("ALTER TABLE search_ledger ADD COLUMN wf_windows_json TEXT")
     conn.commit()
     return conn
 
@@ -97,7 +103,7 @@ def ledger_append(conn: sqlite3.Connection, row: dict) -> int:
         "ts, family, candidate, symbol, timeframe, params_json, phase, verdict,"
         " trades_n, permutation_p, sharpe_ci_lo, wf_positive, wf_total, sharpe,"
         " profit_factor, max_dd_pct, rails, data_start, data_end, data_rows,"
-        " seed, reasons_json, elapsed_s, legs_json"
+        " seed, reasons_json, elapsed_s, legs_json, wf_windows_json"
     )
     placeholders = ", ".join("?" for _ in cols.split(","))
     cur = conn.execute(
@@ -253,6 +259,9 @@ def evaluate_candidate(
         "seed": seed,
         "reasons_json": json.dumps(core["reasons"]),
         "elapsed_s": elapsed,
+        "wf_windows_json": json.dumps(
+            core.get("validation_payload", {}).get("walk_forward", {}).get("windows", [])
+        ),
     }
     row_id = ledger_append(conn, row)
     return {"id": row_id, **row, "core": core}

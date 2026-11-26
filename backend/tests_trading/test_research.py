@@ -145,6 +145,18 @@ def test_permutation_test_is_seeded_reproducible():
     assert a["p_value_sharpe"] == b["p_value_sharpe"]
     assert a["sharpe_samples"] == b["sharpe_samples"]
 
+def test_permutation_survives_ruin_shaped_permutations():
+    # the 2026-11-26 artifact: permuted loss clusters replayed at fixed
+    # dollars cross zero equity, and the first draft aborted the whole test
+    # as 'inconclusive' — on 48/48 F7 cells including winning ones. Ruin is
+    # absorbing, not fatal: the test must complete and the drawdown cap at -1.
+    pnls = [30.0] * 30 + [-320.0] * 5  # any interleaving ruins the $1000 start
+    res = monte_carlo_test(_mktrades(pnls), 1000.0, n_simulations=200, seed=42, bars_per_year=2190)
+    assert "error" not in res, f"ruin-shaped permutations must not abort: {res.get('error')}"
+    assert res["n_simulations"] == 200
+    assert res["actual_max_dd"] >= -1.0
+    assert all(isinstance(s, float) for s in res["sharpe_samples"])
+
 
 def test_bootstrap_ci_sign_follows_equity_direction():
     idx = pd.date_range("2025-01-01", periods=500, freq="4h", tz="UTC")

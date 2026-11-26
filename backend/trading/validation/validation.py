@@ -72,7 +72,7 @@ def monte_carlo_test(
     pnls = np.array([t.pnl for t in trades])
     actual = _path_metrics(pnls, initial_capital, bars_per_year)
     if actual is None:
-        return {"error": "Monte Carlo requires positive finite equity at every observed trade step"}
+        return {"error": "Monte Carlo requires finite equity at every observed trade step"}
 
     rng = np.random.default_rng(seed)
     sharpe_count = 0
@@ -85,11 +85,9 @@ def monte_carlo_test(
 
     for i in range(n_simulations):
         shuffled = rng.permutation(pnls)
+        sim = _path_metrics(shuffled, initial_capital, bars_per_year)
         if sim_equities is not None:
             sim_equities[i] = initial_capital + np.cumsum(shuffled)
-        sim = _path_metrics(shuffled, initial_capital, bars_per_year)
-        if sim is None:
-            return {"error": f"Monte Carlo requires positive finite equity at every simulated trade step (simulation {i + 1})"}
         sim_sharpes.append(sim["sharpe"])
         if sim["sharpe"] >= actual["sharpe"]:
             sharpe_count += 1
@@ -132,12 +130,28 @@ def monte_carlo_test(
 def _path_metrics(
     pnls: np.ndarray, initial_capital: float, bars_per_year: int = 252
 ) -> Dict[str, float] | None:
-    """Compute path metrics, or return None when percentage returns are undefined."""
-    # Include starting cash so the first trade contributes to returns and
-    # drawdown in both the observed path and every shuffled path.
+    """Compute path metrics. Ruin is absorbing: once the compounded dollar
+    path touches zero the strategy is dead, later trades cannot resurrect
+    it — returns flatline there and max drawdown caps at −1. This is the
+    honest treatment of paths the first draft declared invalid: permuted
+    loss clusters replayed at fixed dollars DO cross zero, because
+    compounding-down never shrinks them the way reality's sizing would.
+    That is a real, if overstated, tail-risk measurement — overstated in
+    the same units for the observed path and every permutation, so the
+    comparison stays apples-to-apples. What it must never be is the end
+    of the test itself: the F7 sweep of 2026-11-26 read 'inconclusive' on
+    48/48 cells including cells winning everywhere else, because the abort
+    fired exactly where tail risk was actually being measured."""
     equity = np.concatenate(([initial_capital], initial_capital + np.cumsum(pnls)))
-    if not np.isfinite(equity).all() or (equity <= 0).any():
+    if not np.isfinite(equity).all():
         return None
+    ruined = np.nonzero(equity <= 0)[0]
+    if len(ruined):
+        # absorbing state: equity pinned at zero from the first touch,
+        # returns identically zero afterwards — the dead do not trade
+        first = int(ruined[0])
+        equity = equity.copy()
+        equity[first:] = 0.0
     if len(equity) > 1:
         prev = equity[:-1]
         diff = np.diff(equity)
@@ -148,7 +162,7 @@ def _path_metrics(
     sharpe = float(returns.mean() / (std + 1e-10) * np.sqrt(bars_per_year))
     peak = np.maximum.accumulate(equity)
     dd = (equity - peak) / np.where(peak > 0, peak, 1.0)
-    max_dd = float(dd.min())
+    max_dd = max(float(dd.min()), -1.0)
     return {"sharpe": sharpe, "max_dd": max_dd}
 
 

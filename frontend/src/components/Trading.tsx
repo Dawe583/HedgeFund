@@ -2,12 +2,16 @@ import { Fragment, useEffect, useState } from "react";
 import {
   getBacktestRun,
   getBacktestRuns,
+  getRecentTrades,
+  getTradingPositions,
   getTradingStatus,
   getTradingStrategies,
   type BacktestRun,
   type BacktestRunDetail,
   type RunMetrics,
   type RunProvenance,
+  type TradingClosedTrade,
+  type TradingPosition,
   type TradingStatus,
   type TradingStrategy,
 } from "../api/trading";
@@ -28,10 +32,10 @@ import {
 } from "./tradingStatus";
 
 /* TRADING — the trading plane's page, structured as the design's information
-   architecture (hedge-fund-os.md §8) lays it out, at the stage the system is
-   actually at: the research record first, because it EXISTS; positions and
-   risk as honest placeholders, because the paper engine is an M3 milestone
-   and a page pretending otherwise would be a demo, not a dashboard.
+   architecture (hedge-fund-os.md §8) lays it out: the positions blotter first,
+   because what the desk holds IS the desk; the research record below it.
+   Empty is an answer, never an error — a page pretending otherwise would be
+   a demo, not a dashboard.
 
    The page's design law, inherited from the whole app: no number without
    provenance — the validation figures name the run and date they come from,
@@ -465,6 +469,224 @@ function StrategiesSection({
 }
 
 
+/* ---- The positions blotter ----------------------------------------------
+
+   What the desk is holding right now. The table reads like a terminal
+   blotter: dense mono rows, the side as a direction (▲ long / ▼ short —
+   the semiotics of the tape, not decoration), the protective levels the
+   row carries, and the age TICKING — the server measured age_seconds on
+   its own clock at read time, the page counts forward from that one
+   measurement instead of re-computing against a second clock.
+
+   Age formatting: mm:ss under the hour, hh:mm under the day, then days —
+   a position's age is scanned, never read. */
+
+/** Seconds as the blotter's age readout. Exported (and pure) because the
+    tick's arithmetic is exactly what a render test can pin. */
+export function fmtAge(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s >= 86400) {
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    return `${d}d ${h}h`;
+  }
+  if (s >= 3600) {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return `${h}:${String(m).padStart(2, "0")}h`;
+  }
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function useTick(intervalMs: number): number {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return tick;
+}
+
+function fmtClock(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** The open-positions table. Exported (as PositionsBlotterForTest) because
+    the render tests mount it with fixture rows — the ticking age is the
+    behaviour under test, and a test that cannot mount the table cannot see
+    it tick. `fetchedAt` is when the payload arrived (ms epoch): ages tick
+    from age_seconds plus the time since then, so a stalled page shows
+    advancing ages — the honest reading of rows that keep aging whether or
+    not the page refreshes. */
+export function PositionsBlotter({
+  positions,
+  fetchedAt,
+}: {
+  positions: TradingPosition[];
+  fetchedAt: number;
+}) {
+  const tick = useTick(1000);
+  void tick; // the tick's only job is to re-render; the clock is Date.now()
+  const elapsed = (Date.now() - fetchedAt) / 1000;
+  return (
+    <div className={cardClass + " overflow-x-auto"}>
+      <table className="w-full border-collapse text-xs">
+        <thead>
+          <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
+            <th className="px-3 py-1.5 text-left font-medium">Bot</th>
+            <th className="px-3 py-1.5 text-left font-medium">Symbol</th>
+            <th className="px-3 py-1.5 text-left font-medium">Side</th>
+            <th className="px-3 py-1.5 text-right font-medium">Qty</th>
+            <th className="px-3 py-1.5 text-right font-medium">Entry</th>
+            <th className="px-3 py-1.5 text-right font-medium">Stop</th>
+            <th className="px-3 py-1.5 text-right font-medium">Target</th>
+            <th className="px-3 py-1.5 text-right font-medium">Age</th>
+            <th className="px-3 py-1.5 text-right font-medium">Conf</th>
+          </tr>
+        </thead>
+        <tbody>
+          {positions.map((p) => {
+            const long = p.side === "long";
+            const provenance =
+              `opened ${new Date(p.opened_at).toLocaleString()}` +
+              (p.signal_time
+                ? ` · signal bar ${new Date(p.signal_time).toLocaleString()}`
+                : " · signal time not recorded — row predates the kernel migration") +
+              ` · written by ${p.gate_source}`;
+            return (
+              <tr
+                key={p.id}
+                tabIndex={0}
+                className="border-b border-hair last:border-b-0 hover:bg-olive-tint/40 focus:bg-olive-tint/40"
+              >
+                <td className="px-3 py-1 text-ink-soft">{p.bot}</td>
+                <td className="px-3 py-1 text-ink">{p.symbol}</td>
+                <td
+                  className={"px-3 py-1 font-medium " + (long ? "text-up" : "text-down")}
+                  title={provenance}
+                >
+                  {long ? "▲ long" : "▼ short"}
+                </td>
+                <td className="px-3 py-1 text-right tabular-nums text-ink">{p.qty}</td>
+                <td className="px-3 py-1 text-right tabular-nums text-ink">{p.entry_price}</td>
+                <td className="px-3 py-1 text-right tabular-nums text-down">{p.stop_loss}</td>
+                <td className="px-3 py-1 text-right tabular-nums text-up">{p.take_profit}</td>
+                <td className="px-3 py-1 text-right tabular-nums text-ink" title={provenance}>
+                  {fmtAge(p.age_seconds + elapsed)}
+                </td>
+                <td className="px-3 py-1 text-right tabular-nums text-ink-soft">
+                  {p.confidence.toFixed(2)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export const PositionsBlotterForTest = PositionsBlotter;
+
+/* The recent-trades strip: settled round-trips as evidence the desk actually
+   traded. Dense one-line rows, pnl signed and coloured — a loss reads red
+   because it IS red, never because the palette needed variety. */
+function RecentTradesStrip({ trades }: { trades: TradingClosedTrade[] }) {
+  if (trades.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <h4 className={statLabelClass}>Recently settled</h4>
+      <div className={cardClass + " mt-1 overflow-x-auto"}>
+        <table className="w-full border-collapse text-xs">
+          <tbody>
+            {trades.map((t) => {
+              const won = t.pnl >= 0;
+              return (
+                <tr key={t.id} className="border-b border-hair last:border-b-0">
+                  <td className="px-3 py-1 text-ink-soft">{fmtClock(t.exit_time)}</td>
+                  <td className="px-3 py-1 text-ink-soft">{t.bot}</td>
+                  <td className="px-3 py-1 text-ink">{t.symbol}</td>
+                  <td className={"px-3 py-1 " + (t.side === "long" ? "text-up" : "text-down")}>
+                    {t.side}
+                  </td>
+                  <td className="px-3 py-1 text-right tabular-nums text-ink-soft">
+                    {t.entry_price} → {t.exit_price}
+                  </td>
+                  <td className="px-3 py-1 text-right tabular-nums font-medium">
+                    <span className={won ? "text-up" : "text-down"}>
+                      {won ? "+" : ""}
+                      {t.pnl.toFixed(2)}
+                    </span>
+                  </td>
+                  <td className="px-3 py-1 text-ink-faint">{t.mode}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function PositionsSection({
+  positions,
+  trades,
+  fetchedAt,
+  engineState,
+  error,
+}: {
+  positions: TradingPosition[] | null;
+  trades: TradingClosedTrade[] | null;
+  fetchedAt: number;
+  engineState: "offline" | "running" | null;
+  error: string | null;
+}) {
+  if (error) return <p className="text-down">{error}</p>;
+  if (positions === null) return <p className="text-ink-soft">Loading…</p>;
+  /* The three honest states, and they are three different sentences because
+     they mean three different things: no engine ever ran (nothing to hold),
+     the engine runs but holds nothing (flat is a position too — the zero
+     position), and rows exist (the blotter itself). The engine lamp in the
+     header is the same distinction at a glance; here it becomes words. */
+  if (positions.length === 0) {
+    if (engineState === "running") {
+      return (
+        <>
+          <EmptyState title="Flat — no open positions">
+            The engine is running and holds nothing. Flat is the zero position, not a missing
+            dashboard: when a signal fills, the row appears here with its stop and target.
+          </EmptyState>
+          {trades && trades.length > 0 && <RecentTradesStrip trades={trades} />}
+        </>
+      );
+    }
+    return (
+      <>
+        <EmptyState title="No positions — the engine has not run">
+          Open positions appear here the moment the desk's first entry fills — written to the
+          database at the fill itself, never at end of run. Until then there is nothing to show,
+          and nothing shown is better than something invented.
+        </EmptyState>
+        {trades && trades.length > 0 && <RecentTradesStrip trades={trades} />}
+      </>
+    );
+  }
+  return (
+    <>
+      <PositionsBlotter positions={positions} fetchedAt={fetchedAt} />
+      {trades && trades.length > 0 && <RecentTradesStrip trades={trades} />}
+    </>
+  );
+}
+
+export const PositionsSectionForTest = PositionsSection;
+
+
 /* ---- The page ------------------------------------------------------------ */
 
 export default function Trading() {
@@ -473,6 +695,10 @@ export default function Trading() {
   const [statusError, setStatusError] = useState<string | null>(null);
   const [runs, setRuns] = useState<BacktestRun[] | null>(null);
   const [runsError, setRunsError] = useState<string | null>(null);
+  const [positions, setPositions] = useState<TradingPosition[] | null>(null);
+  const [trades, setTrades] = useState<TradingClosedTrade[] | null>(null);
+  const [positionsAt, setPositionsAt] = useState<number>(0);
+  const [positionsError, setPositionsError] = useState<string | null>(null);
   const [strategies, setStrategies] = useState<TradingStrategy[] | null>(null);
   const [strategiesError, setStrategiesError] = useState<string | null>(null);
 
@@ -487,6 +713,19 @@ export default function Trading() {
     getTradingStrategies()
       .then((s) => alive && setStrategies(s))
       .catch((e) => alive && setStrategiesError(apiError(e, "The strategies registry could not be loaded.")));
+    getTradingPositions()
+      .then((p) => {
+        if (!alive) return;
+        setPositions(p);
+        setPositionsAt(Date.now());
+      })
+      .catch((e) => alive && setPositionsError(apiError(e, "The positions could not be loaded.")));
+    getRecentTrades()
+      .then((t) => alive && setTrades(t))
+      .catch(() => {
+        /* the strip is supplementary evidence; its failure must not blank
+           the positions blotter beside it — absence renders as no strip */
+      });
     return () => {
       alive = false;
     };
@@ -498,12 +737,15 @@ export default function Trading() {
 
       <Section
         title="Positions & risk"
-        hint="Open positions, order intents and the risk rails — kill-switch, daily loss, exposure caps."
+        hint="Open positions as the desk wrote them at the fill — the protective levels each row carries, ages ticking. Settled round-trips below as the desk's recent evidence."
       >
-        <EmptyState title="No engine running">
-          Paper trading starts at milestone M3. Until the engine runs there is nothing to show here
-          — and nothing shown is better than something invented.
-        </EmptyState>
+        <PositionsSection
+          positions={positions}
+          trades={trades}
+          fetchedAt={positionsAt}
+          engineState={status?.engine_state ?? null}
+          error={positionsError}
+        />
       </Section>
 
       <Section

@@ -271,3 +271,146 @@ def test_run_detail_nullable_branches_are_explicit_nulls(client):
     assert body["sharpe_actual"] is None
     assert body["min_trades_required"] is None
     assert body["reasons"] == []
+
+
+# ---------------------------------------------------------------- positions
+
+POSITION_KEYS = {
+    "id", "bot", "symbol", "side", "qty", "entry_price", "stop_loss",
+    "take_profit", "opened_at", "age_seconds", "confidence", "signal_time",
+    "gate_source",
+}
+CLOSED_TRADE_KEYS = {
+    "id", "bot", "symbol", "side", "qty", "entry_price", "exit_price",
+    "entry_time", "exit_time", "pnl", "fees", "confidence", "mode",
+    "gate_source",
+}
+
+
+def _write_position(sf, opened_seconds_ago=300, signal_time=True):
+    import datetime as dt
+
+    from trading.models import OpenPosition
+
+    now = dt.datetime.now(dt.UTC)
+    opened = now - dt.timedelta(seconds=opened_seconds_ago)
+    with sf() as session:
+        row = OpenPosition(
+            bot="scalp", symbol="BTCUSDT", side="long", qty=0.05,
+            entry_price=91000.0, stop_loss=89500.0, take_profit=93500.0,
+            opened_at=opened, confidence=0.62, gate_source="kernel",
+            signal_time=opened if signal_time else None,
+        )
+        session.add(row)
+        session.commit()
+        return row.id
+
+
+def _write_trade(sf):
+    import datetime as dt
+
+    from trading.models import Trade
+
+    now = dt.datetime.now(dt.UTC)
+    with sf() as session:
+        row = Trade(
+            bot="scalp", symbol="BTCUSDT", side="short", qty=0.05,
+            entry_price=93000.0, exit_price=92000.0,
+            entry_time=now - dt.timedelta(hours=8), exit_time=now - dt.timedelta(hours=2),
+            pnl=50.0, fees=1.5, confidence=0.4, mode="paper", gate_source="kernel",
+        )
+        session.add(row)
+        session.commit()
+        return row.id
+
+
+def test_positions_empty_is_the_honest_answer(client):
+    c, sf = client
+    res = c.get("/api/trading/positions")
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_positions_carry_exactly_what_the_row_carries(client):
+    c, sf = client
+    _write_position(sf, opened_seconds_ago=300)
+    res = c.get("/api/trading/positions")
+    assert res.status_code == 200
+    rows = res.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert set(row.keys()) == POSITION_KEYS
+    assert row["bot"] == "scalp"
+    assert row["side"] == "long"
+    assert row["qty"] == 0.05
+    assert row["entry_price"] == 91000.0
+    assert row["stop_loss"] == 89500.0
+    assert row["take_profit"] == 93500.0
+    assert row["confidence"] == 0.62
+    assert row["gate_source"] == "kernel"
+    # server-computed age: ~300s, tolerant of the seconds the test itself takes
+    assert 295 <= row["age_seconds"] <= 330
+    assert isinstance(row["opened_at"], str)
+    assert isinstance(row["signal_time"], str)
+
+
+def test_positions_legacy_row_has_null_signal_time(client):
+    """Rows from before the kernel migration never carried signal_time —
+    explicit null, never invented."""
+    c, sf = client
+    _write_position(sf, signal_time=False)
+    row = c.get("/api/trading/positions").json()[0]
+    assert "signal_time" in row
+    assert row["signal_time"] is None
+
+
+def test_recent_trades_empty_is_the_honest_answer(client):
+    c, sf = client
+    res = c.get("/api/trading/positions/recent-trades")
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_recent_trades_carry_the_settled_round_trip(client):
+    c, sf = client
+    _write_trade(sf)
+    res = c.get("/api/trading/positions/recent-trades")
+    assert res.status_code == 200
+    rows = res.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert set(row.keys()) == CLOSED_TRADE_KEYS
+    assert row["side"] == "short"
+    assert row["pnl"] == 50.0
+    assert row["fees"] == 1.5
+    assert row["mode"] == "paper"
+    assert row["gate_source"] == "kernel"
+    assert isinstance(row["entry_time"], str)
+    assert isinstance(row["exit_time"], str)
+
+
+def test_positions_endpoints_create_nothing(tmp_path):
+    """Same schema-authority rule as the run endpoints: a database without
+    the trading tables answers empty, and gains no tables for being asked."""
+    from sqlalchemy import inspect as sa_inspect
+
+    engine = make_engine(f"sqlite:///{tmp_path}/virgin2.db")
+    sf = make_session_factory(engine)
+
+    def override():
+        db = sf()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_trading_db] = override
+    c = TestClient(app)
+
+    before = sa_inspect(engine).get_table_names()
+    assert c.get("/api/trading/positions").json() == []
+    assert c.get("/api/trading/positions/recent-trades").json() == []
+    assert sa_inspect(engine).get_table_names() == before
+    engine.dispose()

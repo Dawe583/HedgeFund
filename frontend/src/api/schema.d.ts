@@ -1527,6 +1527,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trading/positions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Positions
+         * @description Every open position the desk has written. Empty is the honest answer
+         *     both for "no engine ever ran" and for "the engine runs flat" — the row
+         *     set IS the state; the engine lamp on /status is how the two read apart.
+         */
+        get: operations["list_positions_api_trading_positions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trading/positions/recent-trades": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Recent Trades
+         * @description The last 25 settled round-trips — evidence the desk actually traded,
+         *     newest first. Same empty-is-honest contract as /positions.
+         */
+        get: operations["list_recent_trades_api_trading_positions_recent_trades_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trading/status": {
         parameters: {
             query?: never;
@@ -5393,12 +5436,94 @@ export interface components {
             /** Known Countries */
             known_countries: components["schemas"]["TaxCountryDefault"][];
         };
+        /**
+         * TradingClosedTrade
+         * @description One settled round-trip the desk wrote — the recent evidence strip.
+         */
+        TradingClosedTrade: {
+            /** Bot */
+            bot: string;
+            /** Confidence */
+            confidence: number;
+            /** Entry Price */
+            entry_price: number;
+            /**
+             * Entry Time
+             * Format: date-time
+             */
+            entry_time: string;
+            /** Exit Price */
+            exit_price: number;
+            /**
+             * Exit Time
+             * Format: date-time
+             */
+            exit_time: string;
+            /** Fees */
+            fees: number;
+            /** Gate Source */
+            gate_source: string;
+            /** Id */
+            id: number;
+            /** Mode */
+            mode: string;
+            /** Pnl */
+            pnl: number;
+            /** Qty */
+            qty: number;
+            /** Side */
+            side: string;
+            /** Symbol */
+            symbol: string;
+        };
         /** TradingEquityPoint */
         TradingEquityPoint: {
             /** Equity */
             equity: number;
             /** T */
             t: string;
+        };
+        /**
+         * TradingPosition
+         * @description One open position, exactly what the OpenPosition row carries.
+         *
+         *     age_seconds is server-computed at read time so the UI never re-derives
+         *     age from clock-synchronized arithmetic — one measurement, one clock.
+         *     signal_time is nullable because rows from before the kernel migration
+         *     never carried it (the model's own comment); null is the honest answer.
+         *     There is no rearmed state on the wire: rearm is kernel memory, never
+         *     persisted — a position a restart re-armed IS the same position.
+         */
+        TradingPosition: {
+            /** Age Seconds */
+            age_seconds: number;
+            /** Bot */
+            bot: string;
+            /** Confidence */
+            confidence: number;
+            /** Entry Price */
+            entry_price: number;
+            /** Gate Source */
+            gate_source: string;
+            /** Id */
+            id: number;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Qty */
+            qty: number;
+            /** Side */
+            side: string;
+            /** Signal Time */
+            signal_time: string | null;
+            /** Stop Loss */
+            stop_loss: number;
+            /** Symbol */
+            symbol: string;
+            /** Take Profit */
+            take_profit: number;
         };
         /** TradingProvenance */
         TradingProvenance: {
@@ -9058,6 +9183,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_positions_api_trading_positions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingPosition"][];
+                };
+            };
+        };
+    };
+    list_recent_trades_api_trading_positions_recent_trades_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingClosedTrade"][];
                 };
             };
         };

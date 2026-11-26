@@ -22,6 +22,8 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.schemas_trading import (
+    TradingClosedTrade,
+    TradingPosition,
     TradingRunDetail,
     TradingRunItem,
     TradingStatus,
@@ -32,6 +34,8 @@ from trading.models import (
     BacktestRun,
     BacktestValidation,
     BotStatus,
+    OpenPosition,
+    Trade,
     make_engine,
 )
 from trading.research import STRATEGIES
@@ -122,6 +126,83 @@ def trading_status(db: Session = Depends(get_trading_db)) -> dict:
         "strategies_registered": 0,  # lifecycle tables land in M3
         "validations_total": validations_total,
     }
+
+
+def _aware(value: dt.datetime) -> dt.datetime:
+    # sqlite drops tzinfo on the way back out; the rows are written UTC
+    return value if value.tzinfo is not None else value.replace(tzinfo=dt.UTC)
+
+
+def _position_payload(row: OpenPosition, now: dt.datetime) -> dict:
+    return {
+        "id": row.id,
+        "bot": row.bot,
+        "symbol": row.symbol,
+        "side": row.side,
+        "qty": row.qty,
+        "entry_price": row.entry_price,
+        "stop_loss": row.stop_loss,
+        "take_profit": row.take_profit,
+        "opened_at": _as_iso(row.opened_at),
+        "age_seconds": max(0.0, (now - _aware(row.opened_at)).total_seconds()),
+        "confidence": row.confidence,
+        "signal_time": _as_iso(row.signal_time),
+        "gate_source": row.gate_source,
+    }
+
+
+@router.get("/positions", response_model=list[TradingPosition])
+def list_positions(db: Session = Depends(get_trading_db)) -> list[dict]:
+    """Every open position the desk has written. Empty is the honest answer
+    both for "no engine ever ran" and for "the engine runs flat" — the row
+    set IS the state; the engine lamp on /status is how the two read apart."""
+    if not _tables_present(db):
+        return []
+    try:
+        rows = (
+            db.execute(select(OpenPosition).order_by(OpenPosition.opened_at))
+            .scalars()
+            .all()
+        )
+    except OperationalError:
+        return []
+    now = dt.datetime.now(dt.UTC)
+    return [_position_payload(r, now) for r in rows]
+
+
+@router.get("/positions/recent-trades", response_model=list[TradingClosedTrade])
+def list_recent_trades(db: Session = Depends(get_trading_db)) -> list[dict]:
+    """The last 25 settled round-trips — evidence the desk actually traded,
+    newest first. Same empty-is-honest contract as /positions."""
+    if not _tables_present(db):
+        return []
+    try:
+        rows = (
+            db.execute(select(Trade).order_by(Trade.exit_time.desc()).limit(25))
+            .scalars()
+            .all()
+        )
+    except OperationalError:
+        return []
+    return [
+        {
+            "id": t.id,
+            "bot": t.bot,
+            "symbol": t.symbol,
+            "side": t.side,
+            "qty": t.qty,
+            "entry_price": t.entry_price,
+            "exit_price": t.exit_price,
+            "entry_time": _as_iso(t.entry_time),
+            "exit_time": _as_iso(t.exit_time),
+            "pnl": t.pnl,
+            "fees": t.fees,
+            "confidence": t.confidence,
+            "mode": t.mode,
+            "gate_source": t.gate_source,
+        }
+        for t in rows
+    ]
 
 
 @router.get("/strategies", response_model=list[TradingStrategy])

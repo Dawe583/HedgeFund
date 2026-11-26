@@ -101,3 +101,48 @@ class TradingRunDetail(TradingRunItem):
     min_trades_required: int | None
     equity_curve: list[TradingEquityPoint] | None
     trades: list[TradingTradeEvidence] | None
+
+
+class TradingPosition(BaseModel):
+    """One open position, exactly what the OpenPosition row carries.
+
+    age_seconds is server-computed at read time so the UI never re-derives
+    age from clock-synchronized arithmetic — one measurement, one clock.
+    signal_time is nullable because rows from before the kernel migration
+    never carried it (the model's own comment); null is the honest answer.
+    There is no rearmed state on the wire: rearm is kernel memory, never
+    persisted — a position a restart re-armed IS the same position.
+    """
+
+    id: int
+    bot: str
+    symbol: str
+    side: str
+    qty: float
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    opened_at: dt.datetime
+    age_seconds: float
+    confidence: float
+    signal_time: dt.datetime | None
+    gate_source: str
+
+
+class TradingClosedTrade(BaseModel):
+    """One settled round-trip the desk wrote — the recent evidence strip."""
+
+    id: int
+    bot: str
+    symbol: str
+    side: str
+    qty: float
+    entry_price: float
+    exit_price: float
+    entry_time: dt.datetime
+    exit_time: dt.datetime
+    pnl: float
+    fees: float
+    confidence: float
+    mode: str
+    gate_source: str

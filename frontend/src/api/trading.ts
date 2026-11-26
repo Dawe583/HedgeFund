@@ -107,3 +107,22 @@ export async function getBacktestRuns(): Promise<BacktestRun[]> {
 export async function getBacktestRun(id: number): Promise<BacktestRunDetail> {
   return (await api.get<BacktestRunDetail>(`/api/trading/backtest-runs/${id}`)).data;
 }
+
+/** One open position, exactly the backend's row: the protective levels it
+    carries, the signal-time provenance (null for rows predating the kernel
+    migration), and `age_seconds` measured on the SERVER'S clock at read time
+    — the client ticks forward from it rather than trusting its own clock
+    against opened_at. There is no rearmed state: rearm is kernel memory,
+    never persisted, and a re-armed position IS the same position. */
+export type TradingPosition = Schemas["TradingPosition"];
+
+/** One settled round-trip — the recent-trades strip's evidence row. */
+export type TradingClosedTrade = Schemas["TradingClosedTrade"];
+
+export async function getTradingPositions(): Promise<TradingPosition[]> {
+  return (await api.get<TradingPosition[]>("/api/trading/positions")).data;
+}
+
+export async function getRecentTrades(): Promise<TradingClosedTrade[]> {
+  return (await api.get<TradingClosedTrade[]>("/api/trading/positions/recent-trades")).data;
+}

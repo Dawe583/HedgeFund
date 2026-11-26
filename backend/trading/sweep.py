@@ -40,6 +40,7 @@ def evaluate_cell(payload: dict) -> dict:
     from trading.bots.funding_carry_bot import FundingCarry
     from trading.bots.xs_basket_bot import XSBasket
     from trading.bots.regime_continuation_bot import RegimeContinuation
+    from trading.bots.ml_forecast_bot import MLForecast
     from trading.search import Candidate, evaluate_candidate, in_sample, load_frame, open_ledger, out_of_sample, rails_off_config
 
     makers = {
@@ -48,15 +49,24 @@ def evaluate_cell(payload: dict) -> dict:
     "fundingcarry": lambda p: FundingCarry(**p),
     "xsbasket": lambda p: XSBasket(**p),
     "regimecont": lambda p: RegimeContinuation(**p),
+        "mlforecast": None,  # resolved below: the artifact is symbol-bound
         "continuation1h": lambda p: Continuation1h(**p),
         "scalp": lambda p: ScalpTrend(**p),
         "hft": lambda p: HFTMomentum(**p),
         "breakout": lambda p: BreakoutVol(**p),
         "meanrev": lambda p: MeanRev(**p),
     }
-    make = makers.get(payload["bot_key"])
-    if make is None:
-        raise SystemExit(f"no maker registered for bot_key {payload['bot_key']!r}")
+    if payload["bot_key"] == "mlforecast":
+        from trading.ml_forecast import artifact_for
+
+        art = artifact_for(payload["symbol"], payload["timeframe"], payload["research_db"])
+
+        def make(p, _art=art):
+            return MLForecast(_art, **p)
+    else:
+        make = makers.get(payload["bot_key"])
+        if make is None:
+            raise SystemExit(f"no maker registered for bot_key {payload['bot_key']!r}")
     candidate = Candidate(
         family=payload["family"],
         name=payload["candidate"],

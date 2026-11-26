@@ -318,3 +318,39 @@ def regime_continuation_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candi
 
 
 GRIDS["F8"] = regime_continuation_candidates
+
+
+# F9: ML return forecaster — declared in program-2026-11-26 (budget 12)
+F9_ENTRY_Z = [1.0, 1.5]      # predicted-return significance to enter
+F9_EXIT_Z = [0.2, 0.5, 1.0]  # collapse band for exit
+
+
+def mlforecast_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
+    """The F9 grid: entry/exit z-scores against the model's own out-of-fold
+    noise. 2 x 3 x 2 symbols = 12 exactly. The artifact is trained inside
+    the sweep worker (symbol-aware, in-sample only) — params carry only the
+    trading thresholds, never the model."""
+    from trading.bots.ml_forecast_bot import MLForecast
+
+    out = []
+    for entry_z in F9_ENTRY_Z:
+        for exit_z in F9_EXIT_Z:
+            if exit_z >= entry_z:
+                continue
+            params = {"entry_z": entry_z, "exit_z": exit_z}
+            name = f"mlfc-h6-e{entry_z}-x{exit_z}"
+            out.append(
+                Candidate(
+                    family="F9-mlforecast",
+                    name=name,
+                    bot_key="mlforecast",
+                    params=params,
+                    make=lambda p: None,  # replaced in the worker — artifact is symbol-bound
+                    symbols=list(symbols),
+                    timeframe="1h",
+                )
+            )
+    return out
+
+
+GRIDS["F9"] = mlforecast_candidates

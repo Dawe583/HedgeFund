@@ -38,12 +38,14 @@ def evaluate_cell(payload: dict) -> dict:
     from trading.bots.scalp_bot import ScalpTrend
     from trading.bots.meanrev_regime_bot import MeanRevRegime
     from trading.bots.funding_carry_bot import FundingCarry
+    from trading.bots.xs_basket_bot import XSBasket
     from trading.search import Candidate, evaluate_candidate, in_sample, load_frame, open_ledger, out_of_sample, rails_off_config
 
     makers = {
         "trendmom": lambda p: TrendMomentum(**p),
         "meanrevregime": lambda p: MeanRevRegime(**p),
     "fundingcarry": lambda p: FundingCarry(**p),
+    "xsbasket": lambda p: XSBasket(**p),
         "continuation1h": lambda p: Continuation1h(**p),
         "scalp": lambda p: ScalpTrend(**p),
         "hft": lambda p: HFTMomentum(**p),

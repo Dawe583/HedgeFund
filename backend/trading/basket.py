@@ -89,6 +89,13 @@ def evaluate_basket(
     window_fn = in_sample if phase == "A" else out_of_sample
     dfs = dfs or {s: load_frame(research_db, s, candidate.timeframe) for s in symbols}
     windows = {s: window_fn(df) for s, df in dfs.items()}
+    # cross-sectional hook (F3, 2026-11-26): a candidate may reshape the
+    # windows before any backtest — causal injection only, the hook's own
+    # docstring owns the honesty argument. Probe the class once; instances
+    # are per-slot afterwards exactly as before.
+    injector = getattr(candidate.instance(), "inject_cross_section", None)
+    if callable(injector):
+        windows = injector(windows)
 
     initial = float(cfg.initial_equity)
     legs: dict[str, dict] = {}

@@ -210,3 +210,38 @@ def funding_carry_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
 
 
 GRIDS["F2"] = funding_carry_candidates
+
+
+# F3 — cross-sectional momentum/reversal over the 10-coin basket.
+# 12 cells against a 30 budget: lookback x direction x rebalance = 2x2x3.
+# One candidate = one BASKET evaluation (the composite is the claim), so
+# 12 cells is 12 ledger rows, never 12 x symbols. Declared at program
+# writing; the causal-injection machinery is this family's own addition.
+F3_LOOKBACKS = (72, 168)     # 12d / 28d of trailing return at 4h
+F3_DIRECTIONS = ("momentum", "reversal")
+F3_REBALANCES = (24, 48, 168)  # 4d / 8d / 28d between re-ranks
+
+
+def xs_basket_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
+    from trading.bots.xs_basket_bot import XSBasket
+
+    out: list[Candidate] = []
+    for lookback in F3_LOOKBACKS:
+        for direction in F3_DIRECTIONS:
+            for rebalance in F3_REBALANCES:
+                params = {"lookback": lookback, "tail": 2,
+                          "direction": direction, "rebalance": rebalance}
+                name = f"xs{direction[:3]}-l{lookback}-r{rebalance}"
+                out.append(Candidate(
+                    family="F3-xs-basket",
+                    name=name,
+                    bot_key="xsbasket",
+                    params=params,
+                    make=lambda p: XSBasket(**p),
+                    symbols=list(symbols),
+                    timeframe="4h",
+                ))
+    return out
+
+
+GRIDS["F3"] = xs_basket_candidates

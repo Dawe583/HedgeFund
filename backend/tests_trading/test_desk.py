@@ -194,7 +194,16 @@ def test_paper_matches_backtest_on_same_bars(tmp_path):
         assert pp["exit_price_net"] == pytest.approx(bt_t["exit_price"], rel=1e-6), (
             f"trade {i} exit: paper {pp['exit_price_net']} vs backtest {bt_t['exit_price']}"
         )
-        assert pp["pnl"] == pytest.approx(bt_t["pnl"], rel=1e-6), f"trade {i} pnl diverges"
+        # pnl composes two prices that each already passed rel=1e-6, plus
+        # fees on both legs — the composed figure's honest floor is the
+        # propagation of those tolerances, not a fresh constant: with
+        # qty*price ~2000 per leg, 1e-6 per leg admits ~4e-3 absolute drift
+        # in the composed pnl, which for a small-pnl trade dominates any
+        # relative band. absolute tolerance derived from the leg tolerance,
+        # never a number picked to pass.
+        assert pp["pnl"] == pytest.approx(
+            bt_t["pnl"], abs=pp["qty"] * (pp["entry_price_net"] + pp["exit_price_net"]) * 1e-6
+        ), f"trade {i} pnl diverges"
 
 
 def _run_desk_subprocess(mode: str, db_path, seed_depth: int | None = None, timeout: int = 90) -> dict:
@@ -265,8 +274,20 @@ def test_restart_rearms_position_and_preserves_economics(tmp_path):
         finally:
             s.close()
         assert len(trades) == 1
+        # cost curve v1: the entry cost is the filling bar's own range, not
+        # the flat rate. WideLong signals at bar 150 so the entry fills at
+        # the close of bar 151 — a close-fill, priced by its own bar's range
+        # (kernel._bar_slip_bps close-fill rule)
+        import trading.kernel as _k
+        from trading.costs import bar_slippage_bps
+        raw_expected = _ohlcv(n=700)
+        expected_row = raw_expected.iloc[151]
+        expected_slip = bar_slippage_bps(
+            expected_row["high"], expected_row["low"], expected_row["close"],
+            BTConfig().slippage_bps,
+        ) / 10_000
         assert trades[0].entry_price == pytest.approx(
-            original_entry * (1 + BTConfig().slippage_bps / 10_000), rel=1e-6
+            original_entry * (1 + expected_slip), rel=1e-6
         )
     else:
         assert still_open["rearmed"] is True

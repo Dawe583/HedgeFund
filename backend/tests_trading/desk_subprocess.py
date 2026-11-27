@@ -224,6 +224,7 @@ def parity(db_path: str) -> None:
             {
                 "closed": bool(p.get("closed")),
                 "side": p.get("side"),
+                "qty": p.get("qty"),
                 "entry_price_net": p.get("entry_price_net"),
                 "exit_price_net": p.get("exit_price_net"),
                 "pnl": p.get("pnl"),

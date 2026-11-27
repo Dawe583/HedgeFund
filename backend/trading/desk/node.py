@@ -506,6 +506,21 @@ class DeskNode:
                     "re-arming %s %s %.6f %s from DB after restart",
                     spec.bot, row.side, row.qty, spec.symbol,
                 )
+                # the entry fill's bar anchors both cost legs of the original
+                # entry: price from the row, bar key from the row's fill time.
+                # opened_at is floored to the fill bar's OPEN (fill_time's
+                # keying) where the kernel's fills stamp the CLOSE — the cost
+                # lookup subtracts one interval expecting a close stamp, so
+                # the restored ts must add the interval back. Key space is
+                # nanoseconds everywhere downstream.
+                entry_ts = 0
+                if row.opened_at is not None:
+                    import pandas as pd
+                    from trading.kernel import TIMEFRAME_NS
+                    ts = pd.Timestamp(row.opened_at)
+                    if ts.tzinfo is None:
+                        ts = ts.tz_localize("UTC")
+                    entry_ts = int(ts.value) + TIMEFRAME_NS[spec.timeframe]
                 strat.rearm(
                     side=row.side,
                     qty=row.qty,
@@ -515,6 +530,7 @@ class DeskNode:
                     signal_time=row.opened_at,
                     ledger_row_id=row.id,
                     entry_price=row.entry_price,
+                    entry_ts_event=entry_ts,
                 )
 
     def _strategy_for(self, bot: str):

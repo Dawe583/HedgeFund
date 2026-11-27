@@ -537,6 +537,7 @@ def _make_strategy_class():
             signal_time,
             ledger_row_id: int,
             entry_price: float = 0.0,
+            entry_ts_event: int = 0,
         ) -> None:
             """Re-arm an open position the DB says survived a restart. The
             kernel starts flat, so this is a market re-entry tagged 'rearm' —
@@ -572,6 +573,10 @@ def _make_strategy_class():
                 # economics anchor: the ORIGINAL entry, not the rearm print —
                 # written when the rearm fills, from the DB row the worker kept
                 "original_entry_price": entry_price,
+                # the cost lookup keys on the fill's own bar — that bar is the
+                # ORIGINAL entry's, so the original fill time rides alongside
+                # the original price; the rearm print's bar never enters cost
+                "original_entry_ts_event": entry_ts_event,
             }
             # the rearm order is NOT submitted here: rearm runs at boot,
             # before the first quote exists, and every venue rejects a market
@@ -929,6 +934,8 @@ def _make_strategy_class():
             pos["entry_fill"] = {
                 **fill,
                 "price": pos.get("original_entry_price") or fill["price"],
+                "ts_event": pos.get("original_entry_ts_event") or fill["ts_event"],
+                "role": "entry",
             }
             pos["rearm_fill"] = fill
             pos["pending"] = False
@@ -1004,11 +1011,29 @@ def _make_strategy_class():
                 if cached is not None and cached.is_open:
                     self._cancel_resting(cached)
 
-        def _bar_slip_bps(self, ts_event_ns: int) -> float:
-            """Slippage fraction for a fill stamped at ts_event, from the
-            cost curve over the bar that filled it. Falls back to the flat
-            floor when the bar cannot be resolved — a cost model degrades
-            to the assumption it replaces, never invents precision."""
+        def _bar_slip_bps(self, ts_event_ns: int, role: str) -> float:
+            """Slippage fraction for a fill stamped at ts_event, cost-curved
+            over the stress proxy the fill could honestly know.
+
+            Visibility is the constraint that shapes the rule: an intrabar
+            protective fill (stop/take-profit) happens INSIDE a bar neither
+            the strategy nor any frame has seen close yet — the fill bar's
+            own range is unknowable at fill time in every context, live or
+            backtest. Using it anyway (the backtest's _full frame could)
+            would price live and backtest differently for the same fill —
+            a divergence by construction. The uniform rule instead:
+
+            - intrabar fills (stop, take_profit): the PREVIOUS closed bar's
+              range is the stress proxy — the best pre-fill evidence the
+              tape offers, identical in live and replay, parity by
+              construction. Stress is autocorrelated; the approximation is
+              documented, never hidden.
+            - close fills (entries, timeout/signal/kill exits): the fill IS
+              the bar close, so the fill bar is complete information at fill
+              time — its own range prices the fill exactly.
+
+            Falls back to the flat floor when no bar resolves — a cost model
+            degrades to the assumption it replaces, never invents precision."""
             from trading.costs import bar_slippage_bps
             flat = self._cfg.slippage_bps / 10_000
             try:
@@ -1016,7 +1041,12 @@ def _make_strategy_class():
                 if df is None or not len(df):
                     return flat
                 spec_to_tf = {v: k for k, v in TIMEFRAME_BAR_SPEC.items()}
-                open_ns = ts_event_ns - TIMEFRAME_NS[spec_to_tf[self.config.bar_spec]]
+                interval = TIMEFRAME_NS[spec_to_tf[self.config.bar_spec]]
+                open_ns = ts_event_ns - interval
+                if role in ("stop", "take_profit"):
+                    # step one bar further back: the fill bar is unknowable
+                    # before it closes, everywhere, by construction
+                    open_ns -= interval
                 idx_ns = df.index.asi8 * _UNIT_TO_NS[df.index.unit]
                 hits = (idx_ns == open_ns).nonzero()[0]
                 if not len(hits):
@@ -1041,8 +1071,8 @@ def _make_strategy_class():
             # what the fill cost — a panic exit in a wide bar pays what a
             # panic costs, a quiet entry pays the floor. Flat slippage was
             # never a measurement, it was an average nobody verified.
-            entry_slip = self._bar_slip_bps(pos["entry_fill"]["ts_event"])
-            exit_slip = self._bar_slip_bps(pos["exit_fill"]["ts_event"])
+            entry_slip = self._bar_slip_bps(pos["entry_fill"]["ts_event"], pos["entry_fill"]["role"])
+            exit_slip = self._bar_slip_bps(pos["exit_fill"]["ts_event"], pos["exit_fill"]["role"])
             entry_px = entry_raw * (1 + entry_slip) if side == "long" else entry_raw * (1 - entry_slip)
             exit_px = exit_raw * (1 - exit_slip) if side == "long" else exit_raw * (1 + exit_slip)
             gross = (exit_px - entry_px) * qty * (1 if side == "long" else -1)

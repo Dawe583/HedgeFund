@@ -113,7 +113,7 @@ def _asset(client, currency: str, value: float, day: str) -> None:
 def test_a_currency_the_ecb_does_not_publish_converts_at_yahoos_dollar_close(client, feed, yahoo):
     """4,000 TWD at 32 a dollar and 1.25 dollars a euro is 100.00 EUR, and
     nothing is counted as written any more."""
-    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(1))
+    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(2))
     _asset(client, "TWD", 4000.0, ago(30))
 
     summary = client.get("/api/dashboard/summary").json()
@@ -198,7 +198,7 @@ def test_a_sum_fixed_today_waits_for_todays_close(client, feed, yahoo):
     """Yahoo's row of a day under way is a price still moving: a sum fixed on
     today waits for the day to be over, though yesterday's close is kept. On
     a dollar base, where no ECB rate takes part and only Yahoo's close decides."""
-    yahoo.closes["USDTWD=X"] = weekdays(ago(20), ago(1))
+    yahoo.closes["USDTWD=X"] = weekdays(ago(20), ago(2))
     with SessionLocal() as db:
         db.merge(models.Setting(key=fx.BASE_CURRENCY_KEY, value="USD"))
         db.commit()
@@ -311,7 +311,7 @@ def test_the_catch_up_says_no_source_quotes_a_plans_code(client, feed, yahoo, mo
 def test_another_base_crosses_at_the_ecbs_dollar_of_that_base(client, feed, yahoo, base, value, total):
     """32 TWD a dollar: 44.8 a pound at the ECB's 1.4 dollars a pound, and 32
     a dollar for a dollar base, with no ECB leg at all."""
-    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(1))
+    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(2))
     with SessionLocal() as db:
         db.merge(models.Setting(key=fx.BASE_CURRENCY_KEY, value=base))
         db.commit()
@@ -349,7 +349,7 @@ def test_days_before_yahoos_history_are_asked_about_once(client, feed, yahoo):
     """TWD's daily history at Yahoo starts in 2006 (P0): a reading of a day
     before it asks once, not at every page, and that day's amount is said as
     counted as written."""
-    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(1))
+    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(2))
     twd = _made(client.post("/api/institutions", json={"name": "Taipei bank"}))["id"]
     _made(client.post(f"/api/institutions/{twd}/cash-anchors",
                       json={"date": ago(400), "amount": 5000.0, "currency": "TWD"}))
@@ -476,7 +476,7 @@ def test_a_ledger_row_and_a_transfer_say_whose_rate_they_took(client, feed, yaho
 
 
 def test_the_portfolio_and_the_history_say_yahoos_day_beside_the_ecbs(client, feed, yahoo):
-    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(1))
+    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(2))
     broker = _made(client.post("/api/institutions", json={"name": "Taipei broker"}))["id"]
     sid = _made(client.post(f"/api/institutions/{broker}/snapshots", json={"date": ago(30)}))["id"]
     _made(client.post(f"/api/snapshots/{sid}/holdings",
@@ -500,7 +500,7 @@ def test_an_outside_assistant_is_told_yahoos_day_beside_the_ecbs(client, feed, y
     from app.mcp_server import build_server
     from tests.test_mcp_server import _call, _db_file
 
-    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(1))
+    yahoo.closes["USDTWD=X"] = weekdays(ago(40), ago(2))
     with SessionLocal() as db:
         db.merge(models.Setting(key=fx.BASE_CURRENCY_KEY, value=base))
         db.commit()
@@ -521,7 +521,7 @@ def test_the_chat_is_told_whose_rate(client, feed, yahoo):
     """Its rates line, its ledger lines and its cards' receipts."""
     from app import advisor, tools
 
-    yahoo.closes["USDTWD=X"] = weekdays("2025-12-01", ago(1))
+    yahoo.closes["USDTWD=X"] = weekdays("2025-12-01", ago(2))
     eur, twd = _accounts(client)
     _made(client.post(f"/api/institutions/{eur}/cash-anchors",
                       json={"date": ago(30), "amount": 1000.0, "currency": "USD"}))

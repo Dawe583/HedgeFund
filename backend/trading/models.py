@@ -35,6 +35,17 @@ class Candle(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     symbol: Mapped[str] = mapped_column(String(32))
     timeframe: Mapped[str] = mapped_column(String(8))
+    # Venue identity is part of the primary key (analysis F-3, 2026-11-27):
+    # Binance spot klines, USD-M perp klines and the Hyperliquid fallback are
+    # three DIFFERENT tapes for the same symbol — the desk trades perps, so a
+    # validation silently reading spot measured an instrument nobody trades.
+    # Rows written before this column existed carry '' until the row-labelling
+    # migration (scripts/venue_migration.py) assigns their evidence-verified venue.
+    venue: Mapped[str] = mapped_column(String(32), default="")
+    # What the tape prices: 'spot', 'perp', 'equity', 'etf'. Funding joins are
+    # keyed to perp series only — a funding rate applied to a spot frame is a
+    # perp event joined onto an instrument that never pays it.
+    instrument_type: Mapped[str] = mapped_column(String(16), default="")
     open_time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
     open: Mapped[float] = mapped_column(Float)
     high: Mapped[float] = mapped_column(Float)
@@ -43,7 +54,7 @@ class Candle(Base):
     volume: Mapped[float] = mapped_column(Float)
 
     __table_args__ = (
-        Index("ix_candles_sym_tf_time", "symbol", "timeframe", "open_time", unique=True),
+        Index("ix_candles_sym_tf_venue_time", "symbol", "timeframe", "venue", "open_time", unique=True),
     )
 
 class FundingRate(Base):
@@ -609,6 +620,9 @@ _SQLITE_MIGRATIONS: list[tuple[str, str, str]] = [
     ("strategy_versions", "budget_missed_bars", "INTEGER"),
     # M4 §8: the provenance chain's anchor — trades point at their signal bar
     ("trades", "signal_time", "DATETIME"),
+    # analysis F-3: venue identity separates tapes that share a symbol key
+    ("candles", "venue", "TEXT DEFAULT ''"),
+    ("candles", "instrument_type", "TEXT DEFAULT ''"),
 ]
 
 
@@ -621,6 +635,22 @@ def _migrate_sqlite(engine) -> None:
             if cols and column not in cols:
                 log.warning("sqlite migrate: adding %s.%s", table, column)
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        # The venue-key upgrade rebuilds the candle uniqueness: the old
+        # (symbol, timeframe, open_time) index made spot and perp rows fight
+        # for one key; the new key carries venue. CREATE INDEX IF NOT EXISTS
+        # is a no-op once applied, so this stays in the idempotent guard —
+        # the DROP of the superseded index is deliberate and permanent: rows
+        # are never lost (the index is a constraint, not data), and two
+        # overlapping unique indexes would double every write's cost.
+        if "candles" in {row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}:
+            idx_names = {row[1] for row in conn.execute(text("PRAGMA index_list(candles)"))}
+            if "ix_candles_sym_tf_time" in idx_names:
+                log.warning("sqlite migrate: rebuilding candle uniqueness with venue in the key")
+                conn.execute(text("DROP INDEX ix_candles_sym_tf_time"))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_candles_sym_tf_venue_time"
+                " ON candles (symbol, timeframe, venue, open_time)"
+            ))
 
 
 def _tune_sqlite(engine) -> None:

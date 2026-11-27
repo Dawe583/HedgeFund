@@ -234,7 +234,10 @@ def build() -> None:
         power = r.get("power_label")
         mds = r.get("min_detectable_sharpe")
         if power:
-            res_txt = f"{power} {mds:.2f}" if isinstance(mds, (int, float)) else power
+            # the label already carries the number it was computed from
+            # ("resolvable ±0.098 @ 647 trades") — appending mds again
+            # printed it twice
+            res_txt = power
         else:
             # rows written before the power wiring carry no label — the
             # honest rendering says so rather than borrowing a guess

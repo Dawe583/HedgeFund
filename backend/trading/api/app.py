@@ -37,9 +37,11 @@ app = FastAPI(title="ScalpFX API", version="0.1.0")
 
 from trading.api.audit import router as audit_router
 from trading.api.perf import router as perf_router
+from trading.api.ledger import router as ledger_router
 
 app.include_router(audit_router)
 app.include_router(perf_router)
+app.include_router(ledger_router)
 
 _origins = [
     "http://localhost:3000",

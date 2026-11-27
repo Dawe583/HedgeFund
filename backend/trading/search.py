@@ -100,6 +100,13 @@ def open_ledger(db_path: str) -> sqlite3.Connection:
         # venue existed carry NULL — honestly unknown, never backfilled by
         # guess. New rows always name their tape.
         conn.execute("ALTER TABLE search_ledger ADD COLUMN venue TEXT")
+    if "power_label" not in cols:
+        # the resolution label the verdict was entitled to claim (W1-2
+        # repair): rows before it say nothing about power, which is honest —
+        # nobody measured their blindness
+        conn.execute("ALTER TABLE search_ledger ADD COLUMN power_label TEXT")
+    if "min_detectable_sharpe" not in cols:
+        conn.execute("ALTER TABLE search_ledger ADD COLUMN min_detectable_sharpe REAL")
     conn.commit()
     return conn
 
@@ -109,7 +116,8 @@ def ledger_append(conn: sqlite3.Connection, row: dict) -> int:
         "ts, family, candidate, symbol, timeframe, params_json, phase, verdict,"
         " trades_n, permutation_p, sharpe_ci_lo, wf_positive, wf_total, sharpe,"
         " profit_factor, max_dd_pct, rails, data_start, data_end, data_rows,"
-        " seed, reasons_json, elapsed_s, legs_json, wf_windows_json, venue"
+        " seed, reasons_json, elapsed_s, legs_json, wf_windows_json, venue, power_label,"
+        " min_detectable_sharpe"
     )
     placeholders = ", ".join("?" for _ in cols.split(","))
     cur = conn.execute(

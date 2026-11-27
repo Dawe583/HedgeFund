@@ -12,7 +12,7 @@ for sym in ["BTCUSDT", "ETHUSDT"]:
     fwd = df["close"].shift(-H) / df["close"] - 1.0
     preds = rolling_predictions_cached(df, sym, "1h", horizon=H, window=w, cadence=c)
     both = preds.rename("p").to_frame().join(fwd.rename("f")).dropna()
-    segs = np.array_split(both, 5)
+    segs = [both.iloc[s] for s in np.array_split(np.arange(len(both)), 5)]
     corrs = [float(np.corrcoef(seg["p"], seg["f"])[0, 1]) for seg in segs]
     seg_str = " ".join(f"{x:+.3f}" for x in corrs)
     print(f"{sym} | w{w}-c{c} | seg1..5: {seg_str} | n {len(both)}", flush=True)

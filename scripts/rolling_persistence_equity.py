@@ -16,7 +16,7 @@ for sym in ["GLD", "AAPL", "NFLX", "SLV"]:
         if len(both) < 300:
             print(f"{sym}: insufficient overlap {len(both)}", flush=True)
             continue
-        segs = np.array_split(both, 4)
+        segs = [both.iloc[s] for s in np.array_split(np.arange(len(both)), 4)]
         corrs = [float(np.corrcoef(seg["p"], seg["f"])[0, 1]) for seg in segs]
         seg_str = " ".join(f"{x:+.3f}" for x in corrs)
         print(f"{sym} | w{w}-c{c} | seg1..4: {seg_str} | n {len(both)}", flush=True)

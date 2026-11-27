@@ -215,6 +215,56 @@ def run_backtest(
     return BTResult(trades, eq, _metrics(trades, eq, BarsPerYear.get(timeframe, 8_760)))
 
 
+def _fold_test_metrics(trades: list[dict], equity: pd.Series, test_start_ts, bars_per_year: int) -> dict:
+    """Metrics of the TEST slice only, re-based to the equity at test_start.
+
+    F-5 repair (whole-system-analysis-2026-11-27): the folded run's equity
+    curve starts 500 warmup bars before the test window, and measuring the
+    concatenated curve puts warmup PnL inside every "out-of-sample" verdict —
+    a fold whose test bars were flat still passed on warmup profits. Here the
+    fold's returns restart at zero: the opening equity is the curve's value
+    at test_start (the first test bar's mark), so compounding inside the
+    fold is preserved while nothing before it counts. Trades are counted by
+    ENTRY time inside the test window; a warmup entry that closed inside
+    the test window is excluded from win/profit stats — its pnl landed
+    partly before the fold began, and a fold verdict must measure only what
+    the fold itself produced. The boundary trade's equity effect stays in
+    the equity-derived stats exactly as realized.
+    """
+    test_eq = equity.loc[test_start_ts:]
+    if len(test_eq) < 2:
+        return {"error": f"fold test window has {len(test_eq)} bars — needs at least 2"}
+    anchor = float(test_eq.iloc[0])
+    if anchor <= 0 or not math.isfinite(anchor):
+        return {"error": "fold requires positive finite opening equity at test start"}
+    # returns restart at zero on the first test bar: pct_change over the
+    # slice alone, never reaching back into warmup. Losing the warmup→test
+    # boundary step is exactly honest — it belongs to the warmup.
+    rets = test_eq.pct_change(fill_method=None).dropna()
+    sharpe = 0.0
+    if len(rets) > 1 and rets.std() > 0:
+        sharpe = float(rets.mean() / rets.std() * math.sqrt(bars_per_year))
+    peak = test_eq.cummax()
+    dd = (test_eq - peak) / peak.replace(0, 1)
+    test_end_ts = test_eq.index[-1]
+    test_trades = [t for t in trades if test_start_ts <= t["entry_time"] <= test_end_ts]
+    wins = [t["pnl"] for t in test_trades if t["pnl"] > 0]
+    losses = [t["pnl"] for t in test_trades if t["pnl"] <= 0]
+    gross_w, gross_l = sum(wins), abs(sum(losses))
+    pf = gross_w / gross_l if gross_l > 0 else float("inf") if gross_w > 0 else 0.0
+    wr = len(wins) / len(test_trades) if test_trades else 0.0
+    return {
+        "trades_n": len(test_trades),
+        "win_rate": round(wr, 4),
+        "profit_factor": round(pf, 3),
+        "sharpe": round(sharpe, 3),
+        "max_dd_pct": round(float(dd.min()) * 100, 3),
+        "total_return_pct": round(float(test_eq.iloc[-1] / anchor - 1) * 100, 3),
+        "avg_win": round(sum(wins) / len(wins), 2) if wins else 0.0,
+        "avg_loss": round(-sum(losses) / len(losses), 2) if losses else 0.0,
+    }
+
+
 def walk_forward(
     df: pd.DataFrame,
     strategy_factory: Callable[[], object],
@@ -222,20 +272,35 @@ def walk_forward(
     cfg: BTConfig | None = None,
     timeframe: str = "1h",
 ) -> list[dict]:
-    """Sequential OOS evaluation: fold k is tested strictly after fold k-1."""
+    """Sequential OOS evaluation: fold k is tested strictly after fold k-1.
+
+    NOTE what this measures (F-5 doctrine, whole-system-analysis-2026-11-27):
+    one FIXED parameter set's consistency across time — never adaptation.
+    Strategies are not re-fit per fold (no re-fit hook exists in the
+    harness), so a fold verdict answers "did the same rules still work in
+    this later slice", nothing more. The 500-bar warmup exists only so the
+    strategy's indicators are warmed and its position state is consistent
+    at the fold boundary; warmup bars never enter a fold verdict — metrics
+    are re-based to the test slice (see _fold_test_metrics).
+    """
     folds = []
     size = len(df) // (n_folds + 1)
+    bars_per_year = BarsPerYear.get(timeframe, 8_760)
     for k in range(n_folds):
         test_start = size * (k + 1)
         test_end = size * (k + 2)
-        window = df.iloc[max(0, test_start - 500) : test_end]  # 500-bar warmup carried in
+        warmup = min(500, test_start)  # never negative, honestly recorded
+        window = df.iloc[test_start - warmup : test_end]
         res = run_backtest(window, strategy_factory(), cfg, timeframe)
+        metrics = _fold_test_metrics(res.trades, res.equity, df.index[test_start], bars_per_year)
         folds.append(
             {
                 "fold": k,
                 "start": str(df.index[test_start]),
                 "end": str(df.index[min(test_end, len(df)) - 1]),
-                **res.metrics,
+                "warmup_bars": warmup,
+                "test_rebased": True,  # provenance: metrics measure test-only, re-based returns
+                **metrics,
             }
         )
     return folds

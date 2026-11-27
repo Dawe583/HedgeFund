@@ -199,7 +199,7 @@ def load_frame(research_db: str, symbol: str, timeframe: str, venue: str | None 
     reaches the ledger row without a second channel."""
     from trading.features import build_features
     from trading.models import make_engine, make_session_factory
-    from trading.research import load_candles_df
+    from trading.research import join_funding, load_candles_df
 
     engine = make_engine(research_db)
     sf = make_session_factory(engine)
@@ -208,6 +208,10 @@ def load_frame(research_db: str, symbol: str, timeframe: str, venue: str | None 
     engine.dispose()
     if raw.empty:
         raise SystemExit(f"no candles for {symbol} {timeframe} in {research_db} — run ingest first")
+    # the funding join lives HERE, not only in validate_core: sweep cells
+    # load through this frame, and a funding-carry family measured without
+    # its settlement events is the F3 hole the venue work exists to close.
+    raw, joined = join_funding(raw, research_db, symbol.upper())
     out = build_features(raw)
     out.attrs.update(raw.attrs)
     return out

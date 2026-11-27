@@ -430,6 +430,38 @@ def load_funding_rates(research_db: str, symbol: str) -> pd.Series | None:
     return pd.Series(rows["rate"].astype(float).values, index=idx, name="_funding_rate")
 
 
+def join_funding(df: pd.DataFrame, research_db: str, symbol: str) -> tuple[pd.DataFrame, bool]:
+    """Join the perp funding events onto the frame, keyed to perp truth
+    (2026-11-27): funding is a PERPETUAL event and a perp event joined
+    onto an instrument that never pays it is a hybrid that exists nowhere
+    (the venue migration's evidence voided exactly those rows). The join
+    therefore gates on instrument_type — spot frames and frames without
+    provenance keep the old behavior: no silent perp assumption, because
+    absence of provenance must not silently defund the kernel either.
+
+    Shared by validate_core and search.load_frame — one mechanism, one
+    arithmetic, no second join to drift. Returns (frame, joined)."""
+    if "_funding_rate" in df.columns:
+        return df, False
+    itype = df.attrs.get("instrument_type") if hasattr(df, "attrs") else None
+    if itype not in (None, "", "perp"):
+        return df, False
+    rates = load_funding_rates(research_db, symbol)
+    if rates is None or not len(rates):
+        return df, False
+    col = pd.Series(float("nan"), index=df.index, dtype=float)
+    bar_ns = df.index.asi8
+    rate_ns = rates.index.asi8
+    for j, ts in enumerate(rate_ns):
+        hit = int((bar_ns == ts).nonzero()[0][0]) if (bar_ns == ts).any() else -1
+        if hit >= 0:
+            col.iloc[hit] = float(rates.iloc[j])
+    out = df.copy()
+    out["_funding_rate"] = col
+    out.attrs.update(df.attrs)
+    return out, True
+
+
 def validate_core(
     strategy,
     bot_key: str,
@@ -499,22 +531,12 @@ def validate_core(
     # behavior — absence of provenance must not silently defund the kernel.
     # Each settlement instant lands on the bar whose open matches it; the
     # kernel accrues rate x entry-notional for positions open across it.
-    funding_joined = False
-    if "_funding_rate" not in df.columns:
-        itype = df.attrs.get("instrument_type") if hasattr(df, "attrs") else None
-        if itype in (None, "", "perp"):
-            rates = load_funding_rates(research_db, symbol)
-            if rates is not None and len(rates):
-                col = pd.Series(float("nan"), index=df.index, dtype=float)
-                bar_ns = df.index.asi8
-                rate_ns = rates.index.asi8
-                for j, ts in enumerate(rate_ns):
-                    hit = int((bar_ns == ts).nonzero()[0][0]) if (bar_ns == ts).any() else -1
-                    if hit >= 0:
-                        col.iloc[hit] = float(rates.iloc[j])
-                df = df.copy()
-                df["_funding_rate"] = col
-                funding_joined = True
+    # Funding join (F2/G machinery, keyed to perp truth): each settlement
+    # instant lands on the bar whose open matches it; the kernel accrues
+    # rate x entry-notional for positions open across it. One shared helper —
+    # search.load_frame joins the same way, so CLI validations and sweeps
+    # measure the identical instrument.
+    df, funding_joined = join_funding(df, research_db, symbol)
 
     bars_per_year = BarsPerYear.get(timeframe, 8_760)
     cfg = cfg or BTConfig()

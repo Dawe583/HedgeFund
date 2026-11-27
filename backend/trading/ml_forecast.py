@@ -83,9 +83,13 @@ def load_artifact(path: str) -> dict:
 CACHE_DIR = __import__("pathlib").Path(__file__).resolve().parent.parent / "data" / "ml_artifacts"
 
 
-def artifact_path(symbol: str, timeframe: str, horizon: int) -> "object":
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    return CACHE_DIR / f"mlforecast-{symbol.lower()}-{timeframe}-h{horizon}.pkl"
+def artifact_path(symbol: str, timeframe: str, horizon: int, digest: str) -> "object":
+    """Content-keyed artifact path — digest is mandatory so no caller can
+    ever construct the old data-blind key."""
+    from trading.cacheutil import artifact_file
+
+    stem = f"mlforecast-{symbol.lower()}-{timeframe}-h{horizon}"
+    return artifact_file(CACHE_DIR, stem, digest)
 
 
 def artifact_for(symbol: str, timeframe: str, research_db: str, *, horizon: int = 6) -> dict:
@@ -93,21 +97,26 @@ def artifact_for(symbol: str, timeframe: str, research_db: str, *, horizon: int 
     the out-of-sample window stays virgin for phase B, which is the whole
     point of the program. The artifact is cached beside the research db:
     it is a research artifact, not application state, and deleting it just
-    costs a retrain. The cache key is (symbol, timeframe, horizon); the
-    in-sample window is content-defined by the program's fixed split date,
-    so a stale artifact is impossible while the split stands."""
+    costs a retrain. The cache key is content-keyed on the in-sample frame
+    actually consumed — the old config-only key assumed the split date
+    makes staleness impossible, which is false the moment in-sample candles
+    are repaired or re-ingested (F-8). The frame load therefore precedes
+    the lookup; the cache saves the training, not the read. Writing evicts
+    same-config predecessors."""
     import pickle
 
-    path = artifact_path(symbol, timeframe, horizon)
-    if path.exists():
-        with open(path, "rb") as fh:
-            return pickle.load(fh)
+    from trading.cacheutil import frame_digest, write_artifact
     from trading.search import in_sample, load_frame
 
     df = in_sample(load_frame(research_db, symbol, timeframe))
+    digest = frame_digest(df)
+    stem = f"mlforecast-{symbol.lower()}-{timeframe}-h{horizon}"
+    path = artifact_path(symbol, timeframe, horizon, digest)
+    if path.exists():
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
     art = train_forecaster(df, horizon=horizon)
     art["symbol"] = symbol
     art["trained_through"] = str(df.index[-1])
-    with open(path, "wb") as fh:
-        pickle.dump(art, fh)
+    write_artifact(CACHE_DIR, stem, digest, art)
     return art

@@ -1,6 +1,7 @@
 #!/bin/bash
 # hourly freshness refresh — the validation plane measures the present,
 # never a tape that froze when somebody remembered to run ingest by hand.
+export PATH="/Users/dawe/.local/bin:$PATH"
 cd /Users/dawe/Developer/HedgeFund/backend || exit 1
 for sym in BTCUSDT ETHUSDT SOLUSDT; do
   for tf in 1h 4h; do

@@ -167,6 +167,43 @@ def _fetch_with_retry(ticker, period_days: int, interval: str, symbol: str):
     )
 
 
+def _resample_4h_session_aware(frame):
+    """1h bars -> 4h bars grouped strictly within each UTC date.
+
+    Never mixes bars across days — equities don't trade overnight, so a 4h
+    bar spanning days fabricates structure. Each day's bars are chunked
+    into consecutive blocks of 4 in time order; open_time of a 4h bar is
+    the first constituent 1h bar's open_time (causal — never the block
+    end, so the bar carries no information from its own future).
+
+    Partial trailing blocks (1-3 bars, e.g. half-days or the current
+    unfinished session) are DROPPED, not emitted: no consumer of yahoo
+    4h data exists that needs them (only the ingest CLI feeds this path),
+    and an unflagged partial bar is indistinguishable from a complete one
+    downstream — worse than no bar. Honesty beats completeness.
+    """
+    import pandas as pd
+
+    blocks = []
+    for _, day in frame.groupby(frame.index.date):
+        day = day.sort_index()
+        for start in range(0, len(day) - 3, 4):  # only complete blocks of 4
+            chunk = day.iloc[start:start + 4]
+            blocks.append({
+                "open_time": chunk.index[0],
+                "Open": chunk["Open"].iloc[0],
+                "High": chunk["High"].max(),
+                "Low": chunk["Low"].min(),
+                "Close": chunk["Close"].iloc[-1],
+                "Volume": chunk["Volume"].sum(),
+            })
+    if not blocks:
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+    out = pd.DataFrame(blocks).set_index("open_time")
+    out.index = pd.DatetimeIndex(out.index)
+    return out
+
+
 def fetch_yahoo_candles(symbol: str, timeframe: str, days: int) -> list[dict]:
     """OHLCV rows for one symbol, newest-last, matching the candle schema.
     4h bars are resampled session-aware from 1h (yfinance has no 4h); 1h
@@ -185,9 +222,12 @@ def fetch_yahoo_candles(symbol: str, timeframe: str, days: int) -> list[dict]:
     frame = frame.tz_convert("UTC") if frame.index.tz is not None else frame.tz_localize("UTC")
 
     if timeframe == "4h":
-        frame = frame.resample("4h").agg({
-            "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum",
-        }).dropna()
+        frame = _resample_4h_session_aware(frame)
+        if frame.empty:
+            raise SystemExit(
+                f"yahoo feed: {symbol} produced no complete 4h blocks — "
+                f"insufficient 1h bars or all-partial sessions"
+            )
 
     rows = []
     for ts, r in frame.iterrows():

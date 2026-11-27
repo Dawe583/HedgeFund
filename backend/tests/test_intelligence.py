@@ -168,7 +168,12 @@ def test_budget_absent_before_any_call(client):
 
 def test_budget_reports_the_day_against_the_caps(client, monkeypatch, tmp_path):
     counter = tmp_path / "llm_budget.json"
-    counter.write_text(json.dumps({"day": "2026-11-26", "used": 12, "minute": 1, "minute_used": 0}))
+    # the counter's day must be TODAY — the budget endpoint resets on the
+    # date boundary, so a hardcoded day makes this test a time bomb that
+    # fires every following midnight
+    import datetime as _dt
+    today = _dt.datetime.now(_dt.UTC).date().isoformat()
+    counter.write_text(json.dumps({"day": today, "used": 12, "minute": 1, "minute_used": 0}))
 
     from app.routers import intelligence as intel
     from trading.config import get_settings

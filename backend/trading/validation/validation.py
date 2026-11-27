@@ -166,6 +166,27 @@ def _path_metrics(
     return {"sharpe": sharpe, "max_dd": max_dd}
 
 
+def _stationary_bootstrap(returns: np.ndarray, length: int, mean_block: int, rng) -> np.ndarray:
+    """Politis-Romano stationary bootstrap: concatenated blocks whose start
+    is uniform and whose length is geometric with mean ``mean_block``. The
+    expected serial structure of the tape survives the resample; the iid
+    assumption does not."""
+    n = len(returns)
+    if n < 2 or mean_block < 1:
+        return returns.copy()
+    p = 1.0 / mean_block
+    out = np.empty(length)
+    idx = int(rng.integers(0, n))
+    filled = 0
+    while filled < length:
+        if rng.random() < p:
+            idx = int(rng.integers(0, n))
+        out[filled] = returns[idx % n]
+        idx += 1
+        filled += 1
+    return out
+
+
 # ─── Bootstrap Sharpe CI ───
 
 
@@ -231,8 +252,15 @@ def bootstrap_sharpe_ci(
 
     rng = np.random.default_rng(seed)
     boot_sharpes = []
+    # HedgeFund: stationary block bootstrap (Politis-Romano) replaces the
+    # vendored iid resample. The tape is serially dependent — volatility
+    # clustering is massive at hourly granularity — and iid resampling
+    # destroys exactly the structure the CI must price, tightening it
+    # falsely. Mean block 20 bars: long enough to keep local vol regimes,
+    # short enough that a few hundred bars still yield many distinct blocks.
+    mean_block = 20
     for _ in range(n_bootstrap):
-        sample = rng.choice(returns, size=len(returns), replace=True)
+        sample = _stationary_bootstrap(returns, len(returns), mean_block, rng)
         boot_sharpes.append(_sharpe(sample, bars_per_year))
 
     arr = np.array(boot_sharpes)

@@ -35,6 +35,19 @@ _REST_HOSTS = [
     "https://data-api.binance.vision",
 ]
 _working_host: str | None = None
+_FAPI_HOSTS = [
+    "https://fapi.binance.com",
+]
+_working_fapi_host: str | None = None
+
+# The two Binance markets are different instruments: /api/v3/klines prices
+# the spot pair, /fapi/v1/klines prices the USD-M perpetual the desk trades.
+# `market` selects the tape; the venue labels the rows so the store keeps
+# them apart — they must never share one key again (analysis F-3).
+MARKET_META = {
+    "spot": {"venue": "binance", "instrument_type": "spot"},
+    "perp": {"venue": "binance-usdm", "instrument_type": "perp"},
+}
 
 
 def _parse_kline(k: list) -> dict | None:
@@ -91,13 +104,20 @@ async def fetch_klines(
     days: int | None = None,
     start: dt.datetime | None = None,
     end: dt.datetime | None = None,
+    market: str = "spot",
 ) -> list[dict]:
     """Backfill candles via public REST, paginating 1000 at a time.
 
     Tries every public mirror until one answers — the primary host can be
     unreachable for minutes on flaky home networks.
+
+    `market` picks the instrument: 'spot' hits /api/v3/klines, 'perp' hits
+    the USD-M futures endpoint /fapi/v1/klines — the trading truth, because
+    the desk trades perps. The wire shape is identical; the tape is not.
     """
-    global _working_host
+    global _working_host, _working_fapi_host
+    if market not in MARKET_META:
+        raise ValueError(f"unknown market {market!r} — use one of {sorted(MARKET_META)}")
     if interval not in TF_MS:
         raise ValueError(f"unsupported interval {interval}")
     end = end or dt.datetime.now(dt.UTC)
@@ -107,11 +127,14 @@ async def fetch_klines(
         "interval": interval,
     }
 
-    hosts = list(_REST_HOSTS)
-    if _working_host:
-        hosts.remove(_working_host)
-        hosts.insert(0, _working_host)
+    fapi = market == "perp"
+    hosts = list(_FAPI_HOSTS) if fapi else list(_REST_HOSTS)
+    working = _working_fapi_host if fapi else _working_host
+    if working and working in hosts:
+        hosts.remove(working)
+        hosts.insert(0, working)
 
+    path = "/fapi/v1/klines" if fapi else "/api/v3/klines"
     last_exc: Exception | None = None
     for host in hosts:
         cursor_ms = int(start.timestamp() * 1000)
@@ -122,7 +145,7 @@ async def fetch_klines(
                 while cursor_ms < end_ms:
                     resp = await _get_with_retry(
                         client,
-                        "/api/v3/klines",
+                        path,
                         params={**params, "startTime": cursor_ms, "endTime": end_ms, "limit": 1000},
                     )
                     resp.raise_for_status()
@@ -139,25 +162,32 @@ async def fetch_klines(
             last_exc = exc
             log.warning("binance host %s failed (%s) — trying next mirror", host, exc)
             continue
-        _working_host = host
-        log.info("fetched %d klines %s %s via %s", len(out), symbol, interval, host)
+        if fapi:
+            _working_fapi_host = host
+        else:
+            _working_host = host
+        log.info("fetched %d %s klines %s %s via %s", len(out), market, symbol, interval, host)
         return out
     raise last_exc or RuntimeError("all binance mirrors failed")
 
 
-async def stream_klines(symbol: str, interval: str) -> AsyncIterator[dict]:
-    """Yield *closed* klines forever, auto-reconnecting."""
+async def stream_klines(symbol: str, interval: str, market: str = "spot") -> AsyncIterator[dict]:
+    """Yield *closed* klines forever, auto-reconnecting. `market` selects the
+    instrument exactly as in fetch_klines — the futures stream lives on a
+    different host (fstream) because it is a different instrument, not a
+    mirror."""
     import json
 
     import websockets
 
     settings = get_settings()
     stream = f"{symbol.lower()}@kline_{interval}"
-    url = f"{settings.binance_ws}/{stream}"
+    base = "wss://fstream.binance.com/ws" if market == "perp" else settings.binance_ws
+    url = f"{base}/{stream}"
     while True:
         try:
             async with websockets.connect(url, ping_interval=20) as ws:
-                log.info("ws connected: %s", stream)
+                log.info("ws connected: %s (%s)", stream, market)
                 async for raw in ws:
                     try:
                         msg: dict[str, Any] = json.loads(raw)

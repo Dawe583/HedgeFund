@@ -33,6 +33,31 @@ from trading.models import init_schema, make_engine, make_session_factory
 
 log = logging.getLogger("trading.desk.runner")
 
+def control_strategies() -> dict:
+    """The instrumentation-control catalog — deliberately OUTSIDE
+    research.STRATEGIES, because the catalog is alpha-candidate code and
+    controls are not candidates: they are measurement instruments the desk
+    runs so its operational plane (veto tape, divergence, reconciliation)
+    works against expectations known by construction. Same entry shape as
+    STRATEGIES so resolution treats them uniformly — registration, never
+    resolution, is where the honesty differs."""
+    from trading.bots.random_control_bot import RandomControl
+
+    return {
+        "randomctl": {
+            "key": "randomctl",
+            "cls": RandomControl,
+            "name": "RandomControl",
+            "timeframe": "1h",
+            "symbols": ["BTCUSDT"],
+            "description": (
+                "Instrumentation control — random entries, expectations known by "
+                "construction, never alpha. Registered through registry.register_control."
+            ),
+        }
+    }
+
+
 def resolve_roster_specs(session_factory) -> list:
     """The desk's roster IS the lifecycle registry: every strategy version in
     state `paper` becomes one DeskSpec per universe symbol, parameters and
@@ -52,6 +77,10 @@ def resolve_roster_specs(session_factory) -> list:
         session.close()
     for entry in entries:
         catalog = STRATEGIES.get(entry["key"])
+        if catalog is None:
+            # not an alpha candidate — the control catalog is the only other
+            # thing the lifecycle may lawfully hold in paper
+            catalog = control_strategies().get(entry["key"])
         if catalog is None:
             log.error(
                 "registered version %s v%d references catalog key %r which no longer exists — skipped, never silently traded",

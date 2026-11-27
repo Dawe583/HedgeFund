@@ -494,3 +494,31 @@ def ml_rolling_candidates(symbols=("BTCUSDT", "ETHUSDT")) -> list[Candidate]:
 
 
 GRIDS["F12"] = ml_rolling_candidates
+
+
+# ── Family budgets, machine-readable (stats repair item, 2026-11-27) ──
+# The numbers declared in docs/research/program-2026-11-26.md before each
+# family's first sweep. enforcement: evaluate_candidate consults this table
+# and flags budget_exceeded in the ledger row's reasons — the program's
+# central claim becomes code, not convention. Families absent here declare
+# their budget in their declaration doc; the table grows with the program.
+# Keys are the ledger's family names, not the grid keys — measured against
+# what the ledger actually records. Note the honest discrepancy this table
+# now makes visible: F1 spent 119 cells against a budget of 40, F7 spent
+# 144 against 40 — re-runs appended freely before enforcement existed.
+# The budgets below are the DECLARED ones; enforcement flags, never hides.
+FAMILY_BUDGETS = {
+    "F1-trend": 40,        # 4x5x2 grid exactly — the budget fully allocated
+    "F2-funding-carry": 24,
+    "F3-xs-basket": 24,
+    "F4-volbreakout": 16,
+    "F5-meanrev": 40,
+    "F6-catalog-control": 6,   # production defaults — control means unchanged
+    "F7-continuation": 40,
+    "F8-regime-cont": 20,
+    "F9-mlforecast": 12,
+    "F10-alphasig": 20,
+    "F11-alphabasket": 24,
+    "F12-mlrolling": 16,       # 8 cells per phase x 2 phases
+    "F13-alphaml": 12,         # idle until F12 reads
+}

@@ -265,10 +265,30 @@ def evaluate_candidate(
             and abs(core["metrics"].get("sharpe") or 0.0) >= min_detectable_sharpe(core["n_trades"])
         ),
     }
+    # budget enforcement (analysis F-6, now code): the family's declared
+    # budget is counted against spent ledger rows — phase A cells only,
+    # phase B confirmations are the protocol's own continuation, not new
+    # spend. Overflow never blocks (the ledger is append-only and honest)
+    # but it is always flagged, verbatim, in the row itself.
+    from trading.candidates import FAMILY_BUDGETS
+
+    budget_flag = None
+    if phase == "A":
+        budget = FAMILY_BUDGETS.get(candidate.family)
+        if budget is not None:
+            spent = conn.execute(
+                "select count(*) from search_ledger where family = ? and phase = 'A' and verdict != 'error'",
+                (candidate.family,),
+            ).fetchone()[0]
+            if spent >= budget:
+                budget_flag = (
+                    f"budget_exceeded: family {candidate.family} budget {budget} phase-A cells, "
+                    f"this is cell {spent + 1} — declared budgets are the program's multiple-testing accounting"
+                )
     # the power line rides inside the reasons list as a machine-prefixed
     # entry — the list shape every consumer already parses stays intact,
     # and the resolution label is visible verbatim wherever reasons render.
-    reasons_with_power = list(core["reasons"]) + [
+    reasons_with_power = list(core["reasons"]) + ([budget_flag] if budget_flag else []) + [
         f"power: min-detectable-sharpe {power_label['min_detectable_sharpe']} at {core['n_trades']} trades"
         + (" (resolvable)" if power_label["resolvable"] else " (UNRESOLVABLE - the cell cannot see its own edge)")
     ]

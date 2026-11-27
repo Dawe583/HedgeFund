@@ -1101,7 +1101,8 @@ def run_kernel_backtest(
     change is the REPORTED equity series: result.equity is the realized
     curve it always was — mark-to-market changes which entries the rails
     veto, never what the equity series means. Phase-A sweeps run the rails
-    off (99.9% drawdown), so screening evidence is untouched.
+    off (search.py sets killswitch_dd_pct=99.9 — a drawdown no
+    curve can reach), so screening evidence is untouched.
 
     exposure_book: optional pre-existing ExposureBook — the multi-strategy
     seam. The desk shares one book across strategies; a test can seed one

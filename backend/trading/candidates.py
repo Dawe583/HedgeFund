@@ -587,7 +587,12 @@ GRIDS["G"] = g_funding_carry_candidates
 # Crypto and macro candidates split by venue — a candidate measures one
 # tape, never a blend. Exit hysteresis fixed at 0.5: the family's question
 # is lookback and significance, not exit microstructure.
-H_LOOKBACKS_DAYS = (21, 63, 126)     # 1 / 3 / 6 months of daily bars
+H_LOOKBACKS_DAYS = (5, 10, 21)  # 1 / 2 / 3 weeks of daily bars — REGRID 2026-11-27:
+# the original monthly-scale lookbacks (21/63/126) measured 1-8 positions per series
+# over the in-sample window (median holds 27-616 days — z-sign persistence, not a bug):
+# structurally unresolvable cells before a single sweep row ran. Weekly lookbacks measure
+# 29-88 positions (crypto) and 169-455 (GLD) in-sample — the hypothesis survives at the
+# week scale, and power is a precondition of measurement, not a convenience.
 H_ENTRY_Z = (0.5, 1.0)
 H_CRYPTO = ("BTCUSDT", "ETHUSDT")
 

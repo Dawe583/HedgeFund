@@ -35,7 +35,7 @@ def api(method: str, path: str, data: bytes | None, headers: dict) -> dict:
 def main() -> None:
     if not TOKEN:
         sys.exit("VERCEL_TOKEN missing")
-    files = sorted(DIST.rglob("*.html"))
+    files = sorted(p for p in DIST.rglob("*") if p.is_file())
     if not files:
         sys.exit("portal/dist empty — run build first")
 

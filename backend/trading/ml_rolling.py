@@ -40,18 +40,44 @@ def rolling_predictions(
     window only: the window's last h rows are unusable as labels (their
     forward returns reach past the boundary) and are excluded from fitting
     — the embargo is in the data, not in a promise."""
+    preds = pd.Series(np.nan, index=df.index, dtype=float)
+    preds, _model, _trained = _walk(
+        df, horizon=horizon, window=window, cadence=cadence,
+        preds=preds, start=window + horizon, model=None, trained_through=-1,
+    )
+    return preds
+
+
+def _walk(
+    df: pd.DataFrame,
+    *,
+    horizon: int,
+    window: int,
+    cadence: int,
+    preds: pd.Series,
+    start: int,
+    model,
+    trained_through: int,
+):
+    """The rolling-retrain loop as a resumable walker: given the terminal
+    state of a previous walk (predictions, final model, schedule cursor),
+    continuing it produces bit-identical output to an uninterrupted run.
+    Exactness is structural, not approximate: the retrain schedule keys on
+    absolute positions, training windows reach only backwards, and every
+    feature is backward-looking — state at any position is a function of
+    data strictly before it, so an extended frame replays identically over
+    the overlap.
+
+    Returns (preds, model, trained_through) — the terminal state a later
+    walk resumes from."""
     from sklearn.ensemble import HistGradientBoostingRegressor
 
     d = df.dropna(subset=FEATURES)
     close = df["close"]
     n = len(df)
-    preds = pd.Series(np.nan, index=df.index, dtype=float)
-
-    model = None
-    trained_through = -1
     fwd_all = close.shift(-horizon) / close - 1.0
 
-    for pos in range(window + horizon, n):
+    for pos in range(start, n):
         if model is None or pos - trained_through >= cadence:
             # fit on rows [pos-window-horizon, pos-horizon): labels for these
             # rows resolve strictly before pos — the embargo, structurally
@@ -76,7 +102,7 @@ def rolling_predictions(
         if not all(np.isfinite(x)):
             continue
         preds.iloc[pos] = float(model.predict([x])[0])
-    return preds
+    return preds, model, trained_through
 
 
 CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "ml_artifacts"
@@ -106,7 +132,65 @@ def rolling_predictions_cached(
     path = artifact_file(CACHE_DIR, stem, digest)
     if path.exists():
         with open(path, "rb") as fh:
-            return pickle.load(fh)
-    preds = rolling_predictions(df, horizon=horizon, window=window, cadence=cadence)
-    write_artifact(CACHE_DIR, stem, digest, preds)
+            payload = pickle.load(fh)
+        # exact-hit artifacts are the predictions alone in every format
+        return payload["preds"] if isinstance(payload, dict) else payload
+
+    # prefix-resume: the computation is causal per position and the retrain
+    # schedule keys on absolute positions, so a cached artifact whose frame
+    # is a strict prefix of this one IS the first n0 rows of the answer —
+    # bit-identically. The artifact carries the walk's terminal state
+    # (final model, schedule cursor), so resuming replays the uninterrupted
+    # run exactly. This is what makes hourly ingestion affordable: appending
+    # bars stops invalidating hours of retraining.
+    best = None  # (n_rows, payload)
+    if CACHE_DIR.exists():
+        import re as _re
+        pattern = _re.compile(
+            _re.escape(stem) + r"-[0-9a-f]{16}\.pkl$"
+        )
+        for cand in CACHE_DIR.iterdir():
+            if not pattern.match(cand.name):
+                continue
+            try:
+                with open(cand, "rb") as fh:
+                    payload = pickle.load(fh)
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue  # legacy format: no terminal state, cannot resume
+            n0 = int(payload["n_rows"])
+            if n0 >= len(df) or n0 < window + horizon + 1:
+                continue  # not a strict prefix, or too short to matter
+            if best is not None and n0 <= best[0]:
+                continue  # a longer prefix already won
+            if frame_digest(df.iloc[:n0]) == payload["digest"]:
+                best = (n0, payload)
+
+    if best is not None:
+        n0, payload = best
+        preds = pd.Series(np.nan, index=df.index, dtype=float)
+        preds.iloc[:n0] = payload["preds"].to_numpy()
+        preds, model, trained = _walk(
+            df, horizon=horizon, window=window, cadence=cadence,
+            preds=preds, start=n0,
+            model=payload["model"], trained_through=payload["trained_through"],
+        )
+    else:
+        preds = pd.Series(np.nan, index=df.index, dtype=float)
+        preds, model, trained = _walk(
+            df, horizon=horizon, window=window, cadence=cadence,
+            preds=preds, start=window + horizon, model=None, trained_through=-1,
+        )
+
+    write_artifact(
+        CACHE_DIR, stem, digest,
+        {
+            "preds": preds,
+            "n_rows": len(df),
+            "digest": digest,
+            "model": model,
+            "trained_through": trained,
+        },
+    )
     return preds

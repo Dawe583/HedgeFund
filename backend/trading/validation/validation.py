@@ -300,9 +300,17 @@ def walk_forward_analysis(
 ) -> Dict[str, Any]:
     """Split backtest into sequential windows, check consistency.
 
-    Assign each observed return to exactly one window. Later windows use the
-    preceding equity mark as their opening capital. This is a consistency
-    diagnostic of an existing backtest, not parameter training or OOS testing.
+    What this measures (F-5 doctrine, whole-system-analysis-2026-11-27):
+    the temporal consistency of ONE FIXED parameter set — never adaptation.
+    Strategies are not re-fit per window (no re-fit hook exists in the
+    harness), so a window verdict answers "did the same rules still produce
+    profit in this slice of time", nothing more. Per-window honesty: each
+    window's returns are re-based to that window's own opening equity —
+    nothing from before the window (warmup bars, earlier folds' profits)
+    enters its return, Sharpe, or drawdown. Assign each observed return to
+    exactly one window. Later windows use the preceding equity mark as
+    their opening capital (compounding carries through, verdicts do not
+    inherit it).
 
     Args:
         equity_curve: Equity time series.
@@ -312,7 +320,10 @@ def walk_forward_analysis(
         initial_capital: Optional capital preceding the first observed bar.
 
     Returns:
-        Dict with per_window stats, consistency metrics.
+        Dict with per_window stats, consistency metrics. `windows[i]`
+        entries and `edge_decay.window_sharpes` are test-only re-based
+        measurements — the per-window Sharpe series persisted into the
+        ledger's wf_windows_json is the regime-consistency evidence.
     """
     if isinstance(n_windows, bool) or not isinstance(n_windows, Integral) or n_windows < 1:
         return {"error": f"n_windows must be >= 1, got {n_windows}"}
@@ -416,6 +427,12 @@ def walk_forward_analysis(
     return {
         "analysis_type": "window_consistency",
         "includes_boundary_returns": True,
+        # provenance (F-5, 2026-11-27): every window's return/sharpe/drawdown
+        # is re-based to that window's opening equity — no warmup or prior-
+        # window performance is inside any verdict. Additive keys; consumers
+        # of profitable_windows/n_windows are unaffected.
+        "returns_rebased_per_window": True,
+        "fixed_parameters": True,  # no re-fit per window exists or is implied
         "n_windows": n_windows,
         "windows": windows,
         "profitable_windows": profitable_windows,

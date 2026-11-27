@@ -77,6 +77,33 @@ class FundingRate(Base):
     )
 
 
+class IngestRun(Base):
+    """One ingestion batch, written by the ingest CLI beside the candles it
+    landed (plan weeks 3-4): rows in, holes measured against the timeframe's
+    grid, venue and instrument identity. The freshness foundation — a series
+    that stopped updating is visible in max(ts) per (symbol, timeframe,
+    venue) instead of being discovered by a stale validation weeks later."""
+    __tablename__ = "ingest_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ts: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    timeframe: Mapped[str] = mapped_column(String(8))
+    venue: Mapped[str] = mapped_column(String(32), default="")
+    instrument_type: Mapped[str] = mapped_column(String(16), default="")
+    rows_in: Mapped[int] = mapped_column(Integer, default=0)
+    holes_n: Mapped[int] = mapped_column(Integer, default=0)
+    span_start: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    span_end: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source: Mapped[str] = mapped_column(String(64), default="")
+
+    __table_args__ = (
+        Index("ix_ingest_runs_series", "symbol", "timeframe", "venue", "ts"),
+    )
+
+
+
+
 
 class Trade(Base):
     """A completed (closed) round-trip trade executed by a bot."""

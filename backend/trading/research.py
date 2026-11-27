@@ -35,6 +35,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+
 from trading.backtest.engine import BTConfig, BarsPerYear
 from trading.bots import BreakoutVol, HFTMomentum, MeanRev, ScalpTrend
 from trading.config import get_settings
@@ -47,7 +48,7 @@ from trading.models import (
     make_engine,
     make_session_factory,
 )
-from trading.storage import load_candles_df, upsert_candles
+from trading.storage import instrument_for_venue, load_candles_df, upsert_candles
 from trading.validation import bootstrap_sharpe_ci, monte_carlo_test, walk_forward_analysis
 from trading.validation.models import TradeRecord
 
@@ -67,6 +68,10 @@ ENGINE_VERSION = "nautilus-1.231.0+delayed-close"
 DEFAULT_SEED = 42
 MIN_TRADES = 30
 PERMUTATION_P_MAX = 0.05
+
+# Timeframe milliseconds for the freshness precondition — duplicated small
+# and honest rather than importing the feed module into the validate path.
+TF_MS_FRESHNESS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
 
 # Power of a phase-B cell against the in-sample edge (whole-system analysis
 # F-1, 2026-11-27): for n independent trades the Sharpe standard error is
@@ -160,17 +165,54 @@ STRATEGIES: dict[str, dict] = {
 # ------------------------------------------------------------------- ingest
 
 
-async def _ingest(symbol: str, timeframe: str, days: int, db_url: str) -> tuple[int, str]:
+async def _ingest(symbol: str, timeframe: str, days: int, db_url: str, market: str = "perp") -> tuple[int, str]:
     from trading.feeds.fallback import fetch_candles_any
 
-    rows, venue = await fetch_candles_any(symbol=symbol, interval=timeframe, days=days)
+    rows, venue = await fetch_candles_any(symbol=symbol, interval=timeframe, days=days, market=market)
     engine = make_engine(db_url)
     init_schema(engine)
     sf = make_session_factory(engine)
     with sf() as session:
-        inserted = upsert_candles(session, symbol.upper(), timeframe, rows)
+        inserted = upsert_candles(
+            session, symbol.upper(), timeframe, rows,
+            venue=venue, instrument_type=instrument_for_venue(venue),
+        )
+        _record_ingest_run(session, symbol.upper(), timeframe, venue, rows, inserted, source=f"binance-{market}/fallback")
     engine.dispose()
     return (inserted, venue)
+
+
+def _record_ingest_run(session, symbol: str, timeframe: str, venue: str, rows: list[dict], inserted: int, *, source: str) -> None:
+    """One provenance row per ingestion batch (plan weeks 3-4): what came in,
+    where from, and how many holes the series carries against its own
+    timeframe grid — measured, never assumed. Holes count missing grid slots
+    inside the batch's own span: exchange halts and feed outages become
+    visible instead of hiding inside 'the data we have'."""
+    from trading.feeds.binance import TF_MS
+    from trading.models import IngestRun
+
+    holes = 0
+    span_start = span_end = None
+    if rows:
+        times = sorted(r["open_time"] for r in rows)
+        span_start, span_end = times[0], times[-1]
+        tf_ms = TF_MS.get(timeframe)
+        if tf_ms and len(times) > 1:
+            span_ms = int(span_end.timestamp() * 1000) - int(span_start.timestamp() * 1000)
+            expected = span_ms // tf_ms + 1
+            holes = max(int(expected) - len(set(times)), 0)
+    session.add(IngestRun(
+        symbol=symbol,
+        timeframe=timeframe,
+        venue=venue,
+        instrument_type=instrument_for_venue(venue),
+        rows_in=inserted,
+        holes_n=holes,
+        span_start=span_start,
+        span_end=span_end,
+        source=source,
+    ))
+    session.commit()
 
 
 def cmd_predict(args: argparse.Namespace) -> int:
@@ -281,7 +323,11 @@ def cmd_ingest_ccxt(args: argparse.Namespace) -> int:
         sf = make_session_factory(engine)
         canonical = args.symbol.replace("/", "").split(":")[0].upper()
         with sf() as session:
-            inserted = upsert_candles(session, canonical, args.timeframe, rows)
+            inserted = upsert_candles(
+                session, canonical, args.timeframe, rows,
+                venue=venue, instrument_type=instrument_for_venue(venue),
+            )
+            _record_ingest_run(session, canonical, args.timeframe, venue, rows, inserted, source=f"ccxt:{args.venue}")
         engine.dispose()
         return inserted, venue, canonical
 
@@ -299,7 +345,11 @@ def cmd_ingest_yahoo(args: argparse.Namespace) -> int:
     init_schema(engine)
     sf = make_session_factory(engine)
     with sf() as session:
-        inserted = upsert_candles(session, args.symbol.upper(), args.timeframe, rows)
+        inserted = upsert_candles(
+            session, args.symbol.upper(), args.timeframe, rows,
+            venue="yahoo", instrument_type="equity",
+        )
+        _record_ingest_run(session, args.symbol.upper(), args.timeframe, "yahoo", rows, inserted, source="yfinance")
     engine.dispose()
     print(json.dumps({"ingested": inserted, "venue": "yahoo", "symbol": args.symbol.upper(),
                       "timeframe": args.timeframe, "days": args.days, "db": args.db}))
@@ -307,13 +357,14 @@ def cmd_ingest_yahoo(args: argparse.Namespace) -> int:
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
-    inserted, venue = asyncio.run(_ingest(args.symbol, args.timeframe, args.days, args.db))
+    inserted, venue = asyncio.run(_ingest(args.symbol, args.timeframe, args.days, args.db, market=args.market))
     print(
         json.dumps(
             {
                 "ingested": inserted,
                 "venue": venue,
                 "symbol": args.symbol.upper(),
+                "market": args.market,
                 "timeframe": args.timeframe,
                 "days": args.days,
                 "db": args.db,
@@ -404,6 +455,8 @@ def validate_core(
     honesty — the function trusts the frame it is given and reports its
     actual range.
     """
+    series_last = None
+    freshness: dict = {}
     if df is None:
         data_engine = make_engine(research_db)
         data_sf = make_session_factory(data_engine)
@@ -414,27 +467,54 @@ def validate_core(
             raise SystemExit(
                 f"no candles for {symbol} {timeframe} in {research_db} — run ingest first"
             )
+        # freshness precondition (plan weeks 3-4, analysis F-8): a series
+        # whose newest stored bar is older than twice the bar length is a
+        # series that stopped updating — warn loudly in the payload, never
+        # block: in-sample windows are supposed to end in the past, so the
+        # check reads the SERIES head (max stored open_time), not the window.
+        series_last = raw.index[-1]
+        freshness = {"series_last": str(series_last)}
         df = build_features(raw)
     elif len(df) == 0:
         raise SystemExit(f"empty frame passed for {symbol} {timeframe} — a window with no bars validates nothing")
+    tf_ms = TF_MS_FRESHNESS.get(timeframe)
+    if tf_ms and isinstance(series_last, pd.Timestamp):
+        age_s = (pd.Timestamp.now(tz="UTC") - series_last).total_seconds()
+        if age_s > 2 * tf_ms / 1000:
+            freshness["stale"] = True
+            freshness["age_hours"] = round(age_s / 3600, 1)
+            log.warning(
+                "validate_core: %s %s series is stale — last bar %s (%.1f h old); "
+                "a validation on a series that stopped updating measures the past, not the market",
+                symbol, timeframe, series_last, age_s / 3600,
+            )
+        else:
+            freshness["stale"] = False
 
-    # funding join (F2 machinery, 2026-11-26): each settlement instant lands
-    # on the bar whose open matches it; the kernel accrues rate x entry-
-    # notional for positions open across it. Bars between settlements carry
-    # NaN — the kernel treats NaN as no event. A symbol without funding
-    # history accrues nothing, which is exactly honest for spot-truth candles.
+    # funding join (F2 machinery, keyed to perp truth 2026-11-27): funding is
+    # a PERPETUAL event — a transfer between perp longs and shorts. A spot or
+    # equity frame never pays it, so the join applies only when the frame's
+    # instrument is perp (venue truth travels in attrs from load_candles_df);
+    # frames without venue attrs (tests, synthetic series) keep the old
+    # behavior — absence of provenance must not silently defund the kernel.
+    # Each settlement instant lands on the bar whose open matches it; the
+    # kernel accrues rate x entry-notional for positions open across it.
+    funding_joined = False
     if "_funding_rate" not in df.columns:
-        rates = load_funding_rates(research_db, symbol)
-        if rates is not None and len(rates):
-            col = pd.Series(float("nan"), index=df.index, dtype=float)
-            bar_ns = df.index.asi8
-            rate_ns = rates.index.asi8
-            for j, ts in enumerate(rate_ns):
-                hit = int((bar_ns == ts).nonzero()[0][0]) if (bar_ns == ts).any() else -1
-                if hit >= 0:
-                    col.iloc[hit] = float(rates.iloc[j])
-            df = df.copy()
-            df["_funding_rate"] = col
+        itype = df.attrs.get("instrument_type") if hasattr(df, "attrs") else None
+        if itype in (None, "", "perp"):
+            rates = load_funding_rates(research_db, symbol)
+            if rates is not None and len(rates):
+                col = pd.Series(float("nan"), index=df.index, dtype=float)
+                bar_ns = df.index.asi8
+                rate_ns = rates.index.asi8
+                for j, ts in enumerate(rate_ns):
+                    hit = int((bar_ns == ts).nonzero()[0][0]) if (bar_ns == ts).any() else -1
+                    if hit >= 0:
+                        col.iloc[hit] = float(rates.iloc[j])
+                df = df.copy()
+                df["_funding_rate"] = col
+                funding_joined = True
 
     bars_per_year = BarsPerYear.get(timeframe, 8_760)
     cfg = cfg or BTConfig()
@@ -442,6 +522,7 @@ def validate_core(
 
     records = trades_to_records(result.trades, symbol.upper())
     initial = float(cfg.initial_equity)
+    validation_payload_extra = {"freshness": freshness, "funding_joined": funding_joined, "venue": df.attrs.get("venue", "") if hasattr(df, "attrs") else ""}
     gate = gate_stats(records, result.equity, initial, seed, bars_per_year, min_trades, len(result.trades))
     mc = gate["mc"]
     bs = gate["bs"]
@@ -452,6 +533,7 @@ def validate_core(
     reasons = gate["reasons"]
     verdict = gate["verdict"]
     validation_payload = gate["validation_payload"]
+    validation_payload.update(validation_payload_extra)
 
     # Entries-null confirmation tier (stats repair, 2026-11-27): runs ONLY
     # on survivors — the cells the gate just validated. The hardened
@@ -803,6 +885,8 @@ def main(argv: list[str] | None = None) -> int:
     p_ing = sub.add_parser("ingest", help="backfill candles into the research database")
     p_ing.add_argument("--symbol", default="BTCUSDT")
     p_ing.add_argument("--timeframe", default="4h")
+    p_ing.add_argument("--market", default="perp", choices=["perp", "spot"],
+                       help="binance instrument — perp is the trading truth (the desk trades perps); spot exists for comparison research only")
     p_ing.add_argument("--days", type=int, default=365)
     p_ing.add_argument("--db", default=DEFAULT_RESEARCH_DB, help="candle store (never data.db)")
     p_ing.set_defaults(fn=cmd_ingest)

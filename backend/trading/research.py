@@ -198,9 +198,29 @@ def _record_ingest_run(session, symbol: str, timeframe: str, venue: str, rows: l
         span_start, span_end = times[0], times[-1]
         tf_ms = TF_MS.get(timeframe)
         if tf_ms and len(times) > 1:
-            span_ms = int(span_end.timestamp() * 1000) - int(span_start.timestamp() * 1000)
-            expected = span_ms // tf_ms + 1
-            holes = max(int(expected) - len(set(times)), 0)
+            # the grid the series is honest against depends on the venue's
+            # calendar: crypto trades continuously, equities and metals do
+            # not. Counting calendar-day slots for a daily equity series
+            # convicts every weekend as a hole — GLD measured 1808 holes on
+            # a complete tape before this fix. For venues with sessions the
+            # weekday grid is the honest approximation available without an
+            # exchange calendar: holidays still inflate the count, which the
+            # docstring owns as the documented limit, and weekends stop being
+            # false evidence.
+            continuous = venue in ("binance", "binance-usdm", "hyperliquid")
+            uniq = sorted(set(times))
+            if continuous or tf_ms < 86_400_000:
+                span_ms = int(span_end.timestamp() * 1000) - int(span_start.timestamp() * 1000)
+                expected = span_ms // tf_ms + 1
+                holes = max(int(expected) - len(uniq), 0)
+            else:
+                # session venue at daily-or-longer bars: expect one row per
+                # weekday inside the span, measured against what arrived
+                expected_days = sum(
+                    1 for n in range((span_end.date() - span_start.date()).days + 1)
+                    if (span_start.date() + __import__("datetime").timedelta(days=n)).weekday() < 5
+                )
+                holes = max(expected_days - len({t.date() for t in uniq}), 0)
     session.add(IngestRun(
         symbol=symbol,
         timeframe=timeframe,

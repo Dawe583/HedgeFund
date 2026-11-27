@@ -192,12 +192,12 @@ def ledger_rows() -> list[dict]:
     conn = sqlite3.connect(f"file:{LEDGER_DB}?mode=ro", uri=True)
     try:
         rows = conn.execute(
-            "select id, family, candidate, symbol, phase, verdict, trades_n, sharpe, permutation_p, sharpe_ci_lo, wf_positive, wf_total, ts "
+            "select id, family, candidate, symbol, phase, verdict, trades_n, sharpe, permutation_p, sharpe_ci_lo, wf_positive, wf_total, ts, power_label, min_detectable_sharpe "
             "from search_ledger order by id"
         ).fetchall()
     finally:
         conn.close()
-    cols = ["id", "family", "candidate", "symbol", "phase", "verdict", "trades_n", "sharpe", "permutation_p", "sharpe_ci_lo", "wf_positive", "wf_total", "ts"]
+    cols = ["id", "family", "candidate", "symbol", "phase", "verdict", "trades_n", "sharpe", "permutation_p", "sharpe_ci_lo", "wf_positive", "wf_total", "ts", "power_label", "min_detectable_sharpe"]
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -218,8 +218,8 @@ def build() -> None:
 
     # evidence table page
     ev = ["<h1>search ledger — every measured cell, nothing hidden</h1>"]
-    ev.append(f'<p class="meta">{len(rows)} rows across {len(families)} families — the append-only diary of the research program. validated means the cell passed every gate: permutation, bootstrap CI, walk-forward, minimum trades. <span class="warn">VOID*</span> rows were measured on a defective engine and are published as voided, never deleted — see devz-scaling-incident.</p>')
-    ev.append("<table><tr><th>family</th><th>candidate</th><th>symbol</th><th>phase</th><th>verdict</th><th>trades</th><th>sharpe</th><th>perm p</th><th>wf</th></tr>")
+    ev.append(f"<p class='meta'>{len(rows)} rows across {len(families)} families — the append-only diary of the research program. validated means the cell passed every gate: permutation, bootstrap CI, walk-forward, minimum trades. the resolution column is the cell's power — the smallest Sharpe its trade count could have detected at the program's standard; a rejection below resolution is measured death, above it is blindness written down as blindness. <span class='warn'>VOID*</span> rows were measured on a defective engine and are published as voided, never deleted — see devz-scaling-incident.</p>")
+    ev.append("<table><tr><th>family</th><th>candidate</th><th>symbol</th><th>phase</th><th>verdict</th><th>trades</th><th>sharpe</th><th>perm p</th><th>wf</th><th>resolution</th></tr>")
     for r in rows[-500:]:
         if r.get("id") in voided_ids(rows):
             cls = "warn"
@@ -231,10 +231,18 @@ def build() -> None:
         p = f"{r['permutation_p']:.2f}" if r["permutation_p"] is not None else "—"
         wf = f"{r['wf_positive']}/{r['wf_total']}" if r["wf_total"] else "—"
         sym = (r["symbol"] or "")[:24]
+        power = r.get("power_label")
+        mds = r.get("min_detectable_sharpe")
+        if power:
+            res_txt = f"{power} {mds:.2f}" if isinstance(mds, (int, float)) else power
+        else:
+            # rows written before the power wiring carry no label — the
+            # honest rendering says so rather than borrowing a guess
+            res_txt = '<span class="dim">unlabeled</span>'
         ev.append(
             f"<tr><td>{html.escape(str(r['family']))}</td><td>{html.escape(str(r['candidate']))}</td>"
             f"<td class='dim'>{html.escape(sym)}</td><td>{r['phase']}</td>"
-            f"<td class='{cls}'>{verdict_txt}</td><td>{r['trades_n']}</td><td>{sharpe}</td><td>{p}</td><td>{wf}</td></tr>"
+            f"<td class='{cls}'>{verdict_txt}</td><td>{r['trades_n']}</td><td>{sharpe}</td><td>{p}</td><td>{wf}</td><td>{res_txt}</td></tr>"
         )
     ev.append("</table>")
     (OUT / "ledger.html").write_text(page("search ledger", "\n".join(ev)))

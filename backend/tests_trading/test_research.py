@@ -184,7 +184,7 @@ def _seed_research_db(db_url: str, df) -> None:
     init_schema(engine)
     sf = make_session_factory(engine)
     with sf() as session:
-        upsert_candles(session, "BTCUSDT", "4h", _candle_rows(df))
+        upsert_candles(session, "BTCUSDT", "4h", _candle_rows(df), venue="binance-usdm", instrument_type="perp")
     engine.dispose()
 
 

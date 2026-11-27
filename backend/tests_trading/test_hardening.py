@@ -32,8 +32,8 @@ def test_upsert_conflict_safe(session_factory):
         "close": 1.5,
         "volume": 10,
     }
-    n1 = upsert_candles(session_factory(), "BTCUSDT", "1m", [row])
-    n2 = upsert_candles(session_factory(), "BTCUSDT", "1m", [row, dict(row, close=1.6)])
+    n1 = upsert_candles(session_factory(), "BTCUSDT", "1m", [row], venue="binance-usdm", instrument_type="perp")
+    n2 = upsert_candles(session_factory(), "BTCUSDT", "1m", [row, dict(row, close=1.6)], venue="binance-usdm", instrument_type="perp")
     assert n1 == 1
     assert n2 == 0  # duplicate must never raise nor double-insert
     with session_factory() as s:
@@ -57,10 +57,10 @@ def test_upsert_large_batch_chunks_below_sqlite_var_limit(session_factory):
         }
         for i in range(800)  # 800 × 8 cols = 6400 vars > 999 if unchunked
     ]
-    n = upsert_candles(session_factory(), "BTCUSDT", "4h", rows)
+    n = upsert_candles(session_factory(), "BTCUSDT", "4h", rows, venue="binance-usdm", instrument_type="perp")
     assert n == 800
     # re-running the same batch must stay idempotent
-    assert upsert_candles(session_factory(), "BTCUSDT", "4h", rows) == 0
+    assert upsert_candles(session_factory(), "BTCUSDT", "4h", rows, venue="binance-usdm", instrument_type="perp") == 0
 
 
 # ------------------------------------------------------------------ kv state

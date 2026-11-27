@@ -95,6 +95,11 @@ def open_ledger(db_path: str) -> sqlite3.Connection:
         # regime question (regime-architecture-2026-11-26) and a series
         # that is computed but never persisted cannot be mined afterwards
         conn.execute("ALTER TABLE search_ledger ADD COLUMN wf_windows_json TEXT")
+    if "venue" not in cols:
+        # which tape the cell measured (analysis F-3): rows written before
+        # venue existed carry NULL — honestly unknown, never backfilled by
+        # guess. New rows always name their tape.
+        conn.execute("ALTER TABLE search_ledger ADD COLUMN venue TEXT")
     conn.commit()
     return conn
 
@@ -104,7 +109,7 @@ def ledger_append(conn: sqlite3.Connection, row: dict) -> int:
         "ts, family, candidate, symbol, timeframe, params_json, phase, verdict,"
         " trades_n, permutation_p, sharpe_ci_lo, wf_positive, wf_total, sharpe,"
         " profit_factor, max_dd_pct, rails, data_start, data_end, data_rows,"
-        " seed, reasons_json, elapsed_s, legs_json, wf_windows_json"
+        " seed, reasons_json, elapsed_s, legs_json, wf_windows_json, venue"
     )
     placeholders = ", ".join("?" for _ in cols.split(","))
     cur = conn.execute(
@@ -155,6 +160,7 @@ class Candidate:
     make: object  # callable(params) -> strategy instance
     symbols: list[str] = field(default_factory=lambda: ["BTCUSDT"])
     timeframe: str = "4h"
+    venue: str | None = None  # None = store preference (perp truth first); G/H families declare binance-usdm explicitly
 
     def instance(self):
         return self.make(self.params)
@@ -181,11 +187,16 @@ def in_sample(df: pd.DataFrame) -> pd.DataFrame:
 def out_of_sample(df: pd.DataFrame) -> pd.DataFrame:
     return _window(df, start=OOS_SPLIT)
 
-def load_frame(research_db: str, symbol: str, timeframe: str) -> pd.DataFrame:
+def load_frame(research_db: str, symbol: str, timeframe: str, venue: str | None = None) -> pd.DataFrame:
     """The full feature frame for one symbol-timeframe — loaded once per
     caller, then sliced per phase. Windows lose warm-up history by slicing:
     the first lookback-worth of in-sample bars can never signal, which is
-    the honest price of the split — recorded in every row's data_start."""
+    the honest price of the split — recorded in every row's data_start.
+
+    `venue` selects the tape explicitly; None resolves by the store's
+    preference order (perp truth first) and the choice lands in attrs either
+    way — pandas copy propagates attrs through build_features, so provenance
+    reaches the ledger row without a second channel."""
     from trading.features import build_features
     from trading.models import make_engine, make_session_factory
     from trading.research import load_candles_df
@@ -193,11 +204,13 @@ def load_frame(research_db: str, symbol: str, timeframe: str) -> pd.DataFrame:
     engine = make_engine(research_db)
     sf = make_session_factory(engine)
     with sf() as session:
-        raw = load_candles_df(session, symbol.upper(), timeframe)
+        raw = load_candles_df(session, symbol.upper(), timeframe, venue=venue)
     engine.dispose()
     if raw.empty:
         raise SystemExit(f"no candles for {symbol} {timeframe} in {research_db} — run ingest first")
-    return build_features(raw)
+    out = build_features(raw)
+    out.attrs.update(raw.attrs)
+    return out
 
 
 
@@ -354,6 +367,10 @@ def evaluate_candidate(
         "wf_windows_json": json.dumps(
             core.get("validation_payload", {}).get("walk_forward", {}).get("windows", [])
         ),
+        # which tape the cell measured — the payload carries the resolved
+        # venue even when the candidate did not name one, so the ledger row
+        # always says what was measured, never what was intended.
+        "venue": core.get("validation_payload", {}).get("venue") or getattr(df, "attrs", {}).get("venue") or None,
     }
     row_id = ledger_append(conn, row)
     return {"id": row_id, **row, "core": core}

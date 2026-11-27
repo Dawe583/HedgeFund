@@ -1056,9 +1056,12 @@ class PaperEngine:
                     now - dt.timedelta(days=default_days),
                 )
             rows, _venue = await fetch_candles_any(SYMBOL, tf, start=start, end=now)
+            # the desk trades perps — warmup fetches the perp tape and rows
+            # land under the venue that actually priced them (analysis F-3)
+            _itype = "perp" if _venue in ("binance-usdm", "hyperliquid") else "spot"
             session = self.session_factory()
             try:
-                n = upsert_candles(session, SYMBOL, tf, rows)
+                n = upsert_candles(session, SYMBOL, tf, rows, venue=_venue, instrument_type=_itype)
             finally:
                 session.close()
             log.info("warmup %s +%d candles", tf, n)
@@ -1140,10 +1143,10 @@ class PaperEngine:
     async def _stream_writer(self):
         """Persist live 1m candles; 4h aggregates are refreshed by periodic backfill."""
         try:
-            async for candle in stream_klines(SYMBOL, "1m"):
+            async for candle in stream_klines(SYMBOL, "1m", market="perp"):
                 session = self.session_factory()
                 try:
-                    upsert_candles(session, SYMBOL, "1m", [candle])
+                    upsert_candles(session, SYMBOL, "1m", [candle], venue="binance-usdm", instrument_type="perp")
                 finally:
                     session.close()
         except asyncio.CancelledError:

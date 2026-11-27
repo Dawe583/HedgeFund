@@ -118,6 +118,7 @@ def evaluate_cell(payload: dict) -> dict:
         make=make,
         symbols=list(payload.get("basket") or [payload["symbol"]]),
         timeframe=payload["timeframe"],
+        venue=payload.get("venue"),
     )
     conn = open_ledger(payload["ledger_path"])
     try:
@@ -136,7 +137,7 @@ def evaluate_cell(payload: dict) -> dict:
                     cfg=cfg,
                 )
                 return {k: row.get(k) for k in ("id", "candidate", "symbol", "verdict", "trades_n", "permutation_p", "sharpe", "elapsed_s")}
-            df = load_frame(payload["research_db"], payload["symbol"], payload["timeframe"])
+            df = load_frame(payload["research_db"], payload["symbol"], payload["timeframe"], venue=payload.get("venue"))
             # warm-up rule: the full frame goes in, the phase slice happens
             # inside evaluate_candidate AFTER injection — injected causal
             # columns reach back across the boundary, backtest does not
@@ -210,6 +211,7 @@ def main(argv=None) -> int:
     p.add_argument("--jobs", type=int, default=4)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--db", default="sqlite:////Users/dawe/Developer/HedgeFund/backend/data/research.db")
+    p.add_argument("--venue", default=None, help="tape to measure, e.g. binance-usdm — default: the candidate's declared venue, else store preference (perp truth first)")
     args = p.parse_args(argv)
 
     from trading.candidates import GRIDS
@@ -257,6 +259,7 @@ def main(argv=None) -> int:
                 "seed": args.seed,
                 "research_db": args.db,
                 "ledger_path": ledger_path,
+                "venue": args.venue or cand.venue,
             })
             continue
         for symbol in cand.symbols:
@@ -271,6 +274,7 @@ def main(argv=None) -> int:
                 "seed": args.seed,
                 "research_db": args.db,
                 "ledger_path": ledger_path,
+                "venue": args.venue or cand.venue,
             })
 
     print(json.dumps({"event": "sweep_start", "cells": len(cells), "candidates": len(candidates),

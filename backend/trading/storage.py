@@ -199,6 +199,22 @@ def load_candles_df(
     return out
 
 
+def instrument_for_venue(venue: str) -> str:
+    """Venue tag → what the tape prices. Crypto perp venues are perp by
+    construction (Hyperliquid lists perpetuals only; ccxt's binanceusdm is
+    the USD-M futures market); Binance bare is the spot exchange; Yahoo is
+    cash equities/ETFs — one class downstream, since nothing trades them
+    differently. Unknown venues map to '' — provenance honestly absent,
+    never guessed."""
+    if venue in ("binance-usdm", "hyperliquid") or venue.startswith("ccxt:") and "usdm" in venue:
+        return "perp"
+    if venue == "binance" or venue.startswith("ccxt:"):
+        return "spot"
+    if venue == "yahoo":
+        return "equity"
+    return ""
+
+
 def clear_candles(session, symbol: str, timeframe: str, venue: str | None = None):
     q = delete(Candle).where(Candle.symbol == symbol, Candle.timeframe == timeframe)
     if venue is not None:

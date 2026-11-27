@@ -522,3 +522,111 @@ FAMILY_BUDGETS = {
     "F12-mlrolling": 16,       # 8 cells per phase x 2 phases
     "F13-alphaml": 12,         # idle until F12 reads
 }
+
+
+# ── G-family: funding-carry with venue truth (amendment 2026-11-27) ──
+# The structural transfer re-measured on the tape the desk actually trades.
+# F2's cells ran on the 1h series whose venue was then unknown — the
+# migration's evidence says those rows are binance SPOT: a funding event
+# joined onto an instrument that never pays it. G re-asks the question
+# honestly: perp klines, perp funding, 4h bars (the power bar at 1h is
+# unreachable in-window — declared in the amendment before any measurement).
+# Grid: lookback x threshold x entry_dev = 2x2x2 = 8 points x 2 symbols
+# = 16 cells, 4 in reserve. Symbols: BTC the benchmark, SOL the crowded
+# alt where carry is thickest — the transfer scales with crowding.
+# Power pre-check (declared, arithmetic not measurement): funding regimes
+# flip on multi-day scales; at 4h with deviation timing, ~330 IS days yield
+# an expected 60-150 entries per cell — resolvable at Sharpe ~0.7-1.0.
+# Cells that cannot reach their MDS line ledger untestable by the power
+# bar; the family re-designs rather than confirming noise.
+G_LOOKBACKS = (9, 21)
+G_THRESHOLDS = (0.00005, 0.0001)
+G_ENTRY_DEVS = (0.0, 1.0)
+G_SYMBOLS = ("BTCUSDT", "SOLUSDT")
+
+
+def g_funding_carry_candidates(symbols=G_SYMBOLS) -> list[Candidate]:
+    """The G grid — same mechanism as F2, different instrument truth and
+    resolution: the hypothesis survives contact with the correct tape or
+    the transfer question moves to pure hold-through-settlement carry."""
+    from trading.bots.funding_carry_bot import FundingCarry
+
+    out: list[Candidate] = []
+    syms = list(symbols)[:2]
+    for lookback in G_LOOKBACKS:
+        for threshold in G_THRESHOLDS:
+            for entry_dev in G_ENTRY_DEVS:
+                params = {"lookback": lookback, "threshold": threshold,
+                          "entry_dev": entry_dev, "max_bars": 54}
+                name = f"g-fundcarry-l{lookback}-t{int(threshold*1e6)}-e{entry_dev}"
+                out.append(Candidate(
+                    family="G-funding-carry",
+                    name=name,
+                    bot_key="fundingcarry",
+                    params=params,
+                    make=lambda p: FundingCarry(**p),
+                    symbols=syms,
+                    timeframe="4h",
+                    venue="binance-usdm",
+                ))
+    return out
+
+
+GRIDS["G"] = g_funding_carry_candidates
+
+
+# ── H-family: multi-week trend on daily bars (amendment 2026-11-27) ──
+# The most replicated anomaly in existence at the horizon the measurement
+# pointed to. 3y of daily bars: IS ~22.5 months ≈ 690 crypto bars / ~475
+# equity bars. Power pre-check: a trend entry every 2-4 weeks yields
+# ~20-45 IS round-trips per cell — BELOW the 60-trade Sharpe~1 bar at the
+# slow lookbacks, honestly declared here: slow cells are the mechanism's
+# center and fast cells the power compromise; untestable verdicts are
+# designed-in information, not failure. Grid: 3 lookbacks (in WEEKS as the
+# literature declares them) x 2 entry_z x 3 symbols = 18 cells, 2 reserve.
+# Crypto and macro candidates split by venue — a candidate measures one
+# tape, never a blend. Exit hysteresis fixed at 0.5: the family's question
+# is lookback and significance, not exit microstructure.
+H_LOOKBACKS_DAYS = (21, 63, 126)     # 1 / 3 / 6 months of daily bars
+H_ENTRY_Z = (0.5, 1.0)
+H_CRYPTO = ("BTCUSDT", "ETHUSDT")
+
+
+def h_trend_candidates() -> list[Candidate]:
+    """The H grid, venue-split: crypto legs on the perp tape, the macro leg
+    on Yahoo's GLD — gold showed the strongest measured ML skill and is the
+    densest macro proxy the free data plane carries."""
+    from trading.bots.trend_bot import TrendMomentum
+
+    out: list[Candidate] = []
+    for lookback in H_LOOKBACKS_DAYS:
+        for entry_z in H_ENTRY_Z:
+            params = {"lookback_bars": lookback, "entry_z": entry_z, "exit_z": 0.5}
+            name = f"h-trend-L{lookback}-e{entry_z}-x0.5"
+            out.append(Candidate(
+                family="H-multiweek-trend",
+                name=name + "-crypto",
+                bot_key="trendmom",
+                params=params,
+                make=lambda p: TrendMomentum(**p),
+                symbols=list(H_CRYPTO),
+                timeframe="1d",
+                venue="binance-usdm",
+            ))
+            out.append(Candidate(
+                family="H-multiweek-trend",
+                name=name + "-gld",
+                bot_key="trendmom",
+                params=dict(params),
+                make=lambda p: TrendMomentum(**p),
+                symbols=["GLD"],
+                timeframe="1d",
+                venue="yahoo",
+            ))
+    return out
+
+
+GRIDS["H"] = h_trend_candidates
+
+FAMILY_BUDGETS["G-funding-carry"] = 20   # amendment 2026-11-27: 16 grid + 4 reserve
+FAMILY_BUDGETS["H-multiweek-trend"] = 20  # amendment 2026-11-27: 18 grid + 2 reserve

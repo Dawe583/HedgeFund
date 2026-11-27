@@ -8,23 +8,17 @@ mining, zero sweep compute. Every number below from
 
 ## What was wrong with the instrument, now fixed in code
 
-1. **The permutation-Sharpe veto was structurally void, not just
-   inverted.** Calibration measured it directly: per-trade Sharpe is
-   permutation-invariant except through compounding/ruin — simulated
+1. **The permutation-Sharpe veto was structurally void, not just inverted.** Calibration measured it directly: per-trade Sharpe is permutation-invariant except through compounding/ruin — simulated
    dispersion is ~zero for EVERY cell, steady or lumpy (std/mean ratio
    0.002–0.003 in both). The veto was noise in both directions: it
    certified the voided devz-era F7 artifacts and rejected genuine
    consistency. Removed entirely (`research.py` `gate_stats`); the
    statistic stays in payloads as a measurement, drawdown-path
    permutation remains as tail-risk evidence.
-2. **Bootstrap was iid where the tape is serially dependent.** Volatility
-   clustering at hourly granularity means iid resampling tightens the CI
-   falsely. Replaced with Politis–Romano stationary block bootstrap,
+2. **Bootstrap was iid where the tape is serially dependent.** Volatility clustering at hourly granularity means iid resampling tightens the CI falsely. Replaced with Politis–Romano stationary block bootstrap,
    mean block 20 bars (`validation.py`). Every future CI is wider and
    more honest than the ledger's historical ones.
-3. **Power analysis existed nowhere.** Added `min_detectable_sharpe(n)`
-   and `power_verdict` (`research.py`) — SE ≈ 1/√n normal approximation,
-   one-sided α .05, power .8, declared optimistic in every direction.
+3. **Power analysis existed nowhere.** Added `min_detectable_sharpe(n)` and `power_verdict` (`research.py`) — SE ≈ 1/√n normal approximation, one-sided α .05, power .8, declared optimistic in every direction.
 
 ## The boundary question, answered by mining
 

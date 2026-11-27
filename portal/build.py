@@ -90,19 +90,31 @@ def render_markdown(text: str) -> str:
             if not in_table:
                 out.append("<table>")
                 in_table = True
-            out.append("<tr>" + "".join(f"<{tag}>{html.escape(c)}</{tag}>" for c in cells) + "</tr>")
+            out.append("<tr>" + "".join(f"<{tag}>{inline(c)}</{tag}>" for c in cells) + "</tr>")
             continue
         elif in_table:
             out.append("</table>")
             in_table = False
-        if re.match(r"^[-*] ", line.strip()):
-            if not in_list:
+        stripped = line.strip()
+        mnum = re.match(r"^(\d+)\.\s+(.*)$", stripped)
+        if re.match(r"^[-*] ", stripped):
+            if in_list != "ul":
+                if in_list:
+                    out.append(f"</{in_list}>")
                 out.append("<ul>")
-                in_list = True
-            out.append(f"<li>{inline(line.strip()[2:])}</li>")
+                in_list = "ul"
+            out.append(f"<li>{inline(stripped[2:])}</li>")
+            continue
+        elif mnum:
+            if in_list != "ol":
+                if in_list:
+                    out.append(f"</{in_list}>")
+                out.append("<ol>")
+                in_list = "ol"
+            out.append(f"<li>{inline(mnum.group(2))}</li>")
             continue
         elif in_list:
-            out.append("</ul>")
+            out.append(f"</{in_list}>")
             in_list = False
         if line.startswith("###"):
             out.append(f"<h3>{inline(line.lstrip('#').strip())}</h3>")
@@ -117,8 +129,14 @@ def render_markdown(text: str) -> str:
     if in_table:
         out.append("</table>")
     if in_list:
-        out.append("</ul>")
-    return "\n".join(out)
+        out.append(f"</{in_list}>")
+    # Bold spans legitimately cross hard-wrapped source lines; the line-wise
+    # pass above cannot pair those markers. Join across element boundaries
+    # where safe: an odd-count ** sequence inside one element followed by
+    # its closing in the next sibling gets merged into one emphasis span.
+    joined = "\n".join(out)
+    joined = re.sub(r"\*\*([^*\n]{0,200})</(li|p)>\n<(p|li)>\s*([^*\n]{0,200})\*\*", r"<strong>\1\4</strong>", joined)
+    return joined
 
 
 def inline(text: str) -> str:

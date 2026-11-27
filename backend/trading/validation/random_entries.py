@@ -69,7 +69,7 @@ def random_entries_test(
     cfg,
     timeframe: str,
     *,
-    n_simulations: int = 30,
+    n_simulations: int = 200,
     seed: int = 42,
     min_hold: int = 4,
 ) -> dict:
@@ -112,13 +112,37 @@ def random_entries_test(
         return {"error": "frame too short for matched entry count",
                 "actual_sharpe": round(actual_sharpe, 4)}
 
+    # entry spacing matched (stats repair 2026-11-27): candidate entries
+    # cluster — a control sampling uniformly independent bars compares
+    # against a trade cadence the candidate never had. The control enforces
+    # the candidate's own median inter-entry gap as minimum spacing.
+    gaps = np.diff(sorted(entry_bars))
+    min_gap = int(np.median(gaps)) if len(gaps) else 1
+
+    def _spaced_sample() -> list[int]:
+        # sequential scan with spacing enforcement; bounded tries so a
+        # pathological frame cannot loop forever
+        chosen: list[int] = []
+        available = list(range(first, last))
+        tries = 0
+        while len(chosen) < n_entries and tries < n_entries * 40 and available:
+            tries += 1
+            b = int(available[rng.integers(0, len(available))])
+            if chosen and b - chosen[-1] < min_gap:
+                continue
+            if not chosen or b > chosen[-1]:
+                chosen.append(b)
+        return chosen
+
     sim_sharpes: list[float] = []
     for _ in range(n_simulations):
-        bars = rng.choice(np.arange(first, last), size=min(n_entries, last - first), replace=False)
+        bars = _spaced_sample()
+        if len(bars) < 3:
+            bars = sorted(rng.choice(np.arange(first, last), size=min(n_entries, last - first), replace=False).tolist())
         entries = {}
         holds_map = {}
         perm_holds = rng.permutation(holds)
-        for j, b in enumerate(sorted(bars)):
+        for j, b in enumerate(sorted(int(x) for x in bars)):
             b = int(b)
             entries[b] = "long" if rng.random() < long_frac else "short"
             holds_map[b] = int(perm_holds[j % len(perm_holds)])
@@ -127,7 +151,10 @@ def random_entries_test(
         sim_sharpes.append(float(sim.metrics.get("sharpe", 0.0)))
 
     arr = np.array(sim_sharpes)
-    p_value = float((arr >= actual_sharpe).mean())
+    # +1 correction (Phipson-Smyth): the un-corrected estimator can report
+    # p = 0.0, which is not a p-value — with n simulations the minimum
+    # achievable is 1/(n+1) and honest reporting starts there.
+    p_value = float((1 + (arr >= actual_sharpe).sum()) / (len(arr) + 1))
     return {
         "actual_sharpe": round(actual_sharpe, 4),
         "control_mean": round(float(arr.mean()), 4),
@@ -137,4 +164,5 @@ def random_entries_test(
         "n_simulations": n_simulations,
         "n_entries_matched": n_entries,
         "long_fraction": round(long_frac, 3),
+        "min_entry_gap_matched": min_gap,
     }

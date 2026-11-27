@@ -453,6 +453,27 @@ def validate_core(
     verdict = gate["verdict"]
     validation_payload = gate["validation_payload"]
 
+    # Entries-null confirmation tier (stats repair, 2026-11-27): runs ONLY
+    # on survivors — the cells the gate just validated. The hardened
+    # random-entries control answers the question the permutation veto never
+    # could: are the ENTRIES informative, or would random entries with
+    # matched count, direction mix, spacing, and holds do as well? It is a
+    # confirmation tier, not a veto: reported in the payload and the
+    # reasons, while the doctrine for vetoing on it is declared before use.
+    if verdict == "validated" and df is not None:
+        try:
+            from trading.validation.random_entries import random_entries_test
+
+            entries_null = random_entries_test(df, strategy, cfg, timeframe, seed=seed)
+            validation_payload["entries_null"] = entries_null
+            p_entries = entries_null.get("p_value_entries")
+            if p_entries is not None:
+                reasons = list(reasons) + [
+                    f"entries-null confirmation: p {p_entries} (random entries matched on count/direction/spacing/holds)"
+                ]
+        except Exception as exc:  # confirmation failure never voids a validation
+            validation_payload["entries_null"] = {"error": str(exc)}
+
     return {
         "verdict": verdict,
         "result": result,

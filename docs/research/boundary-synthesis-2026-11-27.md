@@ -132,10 +132,30 @@ remains zero.
 
 ## 6. What this synthesis deliberately does not say
 
-It does not claim the search is over: G/H/F12 are unrun. It does not
-rescue the 13 underpowered rows: indeterminate means indeterminate. It
-does not treat the venue repair as a reprieve for dead families: their
-mechanisms were tape-insensitive at measurement scale, and re-running
-them on perps is a new declaration with new budget, never a free retrial.
-The boundary question is narrower than it was yesterday and wider than
-anyone hoped — which is what an honest instrument costs.
+It does not claim the search is over. It does not rescue the 13
+underpowered rows: indeterminate means indeterminate. It does not treat
+the venue repair as a reprieve for dead families: their mechanisms were
+tape-insensitive at measurement scale, and re-running them on perps is a
+new declaration with new budget, never a free retrial. The boundary
+question is narrower than it was yesterday and wider than anyone hoped —
+which is what an honest instrument costs.
+
+## Addendum, written after the F12 phase-A sweep landed the same night
+
+F12 is no longer unrun: all 8 phase-A cells rejected, mean Sharpe −4.55,
+every row resolvable at its trade count, permutation p ≈ 1 in the
+systematic-loser shape. The decisive measurement was the zero-cost
+counterfactual — same entries, same exits, the cost model switched off:
+−12.19% against −12.21% with costs. The family did not die of friction;
+its entries precede adverse moves. The rolling momentum signal is
+anti-predictive out of the training window, in-sample, which is the
+strongest death this program has measured: no power caveat, no cost
+alibi, no regime excuse — the mechanism itself is wrong-signed on this
+tape. What it licenses is exactly what G licensed: a candidate for the
+next amendment (inverted momentum, declared before measurement, powered
+before compute), never a quiet refit of measured-dead cells. Full record:
+`f12-phase-a-verdict-2026-11-27.md`. Phase B and the persistence
+measurement run overnight under the repaired instrumentation; the
+persistence instrument itself was found broken mid-run (array_split
+silently downcasting frames) and repaired before any of its numbers were
+read.

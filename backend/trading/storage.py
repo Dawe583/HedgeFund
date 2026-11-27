@@ -1,6 +1,7 @@
 """Storage helpers — candle persistence + queries used by API and bots."""
 
 import datetime as dt
+import logging
 
 import pandas as pd
 from sqlalchemy import delete, select
@@ -10,6 +11,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from trading.models import Candle, make_engine, make_session_factory
+
+log = logging.getLogger(__name__)
 
 
 def _ts(value) -> int:

@@ -16,7 +16,6 @@ in what the model saw.
 
 from __future__ import annotations
 
-import hashlib
 import pickle
 from pathlib import Path
 
@@ -94,19 +93,20 @@ def rolling_predictions_cached(
 ) -> pd.Series:
     """File-cached rolling predictions — a deterministic function of
     (candles, config), so the cache is a research artifact: delete to
-    invalidate, never a module global. The key covers the config and the
-    frame's own hash, so new candles produce a new artifact rather than a
-    stale hit."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    frame_hash = hashlib.sha256(
-        (str(df.index[0]) + str(df.index[-1]) + str(len(df))).encode()
-    ).hexdigest()[:10]
-    key = f"rollpred-{symbol.lower()}-{timeframe}-h{horizon}-w{window}-c{cadence}-{frame_hash}.pkl"
-    path = CACHE_DIR / key
+    invalidate, never a module global. The key is CONTENT-keyed: the
+    digest covers every value of the frame the computation consumed, so
+    repaired candles — even holes of equal length — produce a new key
+    instead of a stale hit (the F-8 failure the old position-keyed hash
+    structurally could not see). Writing evicts same-config predecessors:
+    they are the pre-repair computation and must not survive."""
+    from trading.cacheutil import artifact_file, frame_digest, write_artifact
+
+    digest = frame_digest(df)
+    stem = f"rollpred-{symbol.lower()}-{timeframe}-h{horizon}-w{window}-c{cadence}"
+    path = artifact_file(CACHE_DIR, stem, digest)
     if path.exists():
         with open(path, "rb") as fh:
             return pickle.load(fh)
     preds = rolling_predictions(df, horizon=horizon, window=window, cadence=cadence)
-    with open(path, "wb") as fh:
-        pickle.dump(preds, fh)
+    write_artifact(CACHE_DIR, stem, digest, preds)
     return preds

@@ -375,6 +375,9 @@ def evaluate_candidate(
         "data_rows": len(df),
         "seed": seed,
         "reasons_json": json.dumps(reasons_with_power),
+        "power_label": ("resolvable" if power_label["resolvable"] else "unresolvable")
+        + f" ±{power_label['min_detectable_sharpe']} @ {core['n_trades']} trades",
+        "min_detectable_sharpe": power_label["min_detectable_sharpe"],
         "elapsed_s": elapsed,
         "wf_windows_json": json.dumps(
             core.get("validation_payload", {}).get("walk_forward", {}).get("windows", [])

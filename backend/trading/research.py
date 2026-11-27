@@ -67,6 +67,47 @@ ENGINE_VERSION = "nautilus-1.231.0+delayed-close"
 DEFAULT_SEED = 42
 MIN_TRADES = 30
 PERMUTATION_P_MAX = 0.05
+
+# Power of a phase-B cell against the in-sample edge (whole-system analysis
+# F-1, 2026-11-27): for n independent trades the Sharpe standard error is
+# roughly 1/sqrt(n); detecting a true Sharpe S at one-sided alpha .05 with
+# power .8 needs approximately n = ((z95 + z80) / S)^2. Phase-B windows so
+# far carried 13-16 trades — capable of confirming only Sharpe >= ~2, blind
+# to the Sharpe ~1 edges the program hunts. "Regime decay" and
+# "statistically invisible" are indistinguishable below that line, and the
+# ledger must say which one it measured.
+Z_ONE_SIDED_95 = 1.645
+Z_POWER_80 = 0.842
+
+
+def min_detectable_sharpe(n_trades: int) -> float:
+    """The smallest true Sharpe a cell of n independent trades can confirm
+    at one-sided 5% with 80% power. Approximation: normal, independent
+    trades, constant edge — optimistic in every direction, so the real
+    detectability floor is never lower than this number."""
+    if n_trades < 1:
+        return float("inf")
+    return (Z_ONE_SIDED_95 + Z_POWER_80) / math.sqrt(n_trades)
+
+
+def power_verdict(n_trades: int, in_sample_sharpe: float | None) -> dict:
+    """Compare what the cell can see with what the candidate showed
+    in-sample. Returns the honest label: confirmable (the test can see the
+    edge if it persisted), underpowered (a death here proves nothing), or
+    blind (fewer trades than the gate minimum could ever certify)."""
+    mds = min_detectable_sharpe(n_trades)
+    if in_sample_sharpe is not None and in_sample_sharpe > 0 and mds <= in_sample_sharpe:
+        label = "confirmable"
+    else:
+        label = "underpowered"
+    return {
+        "min_detectable_sharpe": round(mds, 3),
+        "power": label,
+        "n_trades": n_trades,
+        # honest caveat: normal independent-trade approximation, optimistic
+        # in every direction — the real detectability floor is never lower.
+        "model": "normal-approx, SE=1/sqrt(n_trades), one-sided .05, power .8",
+    }
 N_SIMULATIONS = 1000
 N_BOOTSTRAP = 1000
 N_WINDOWS = 5
@@ -456,10 +497,18 @@ def gate_stats(records, equity, initial, seed, bars_per_year, min_trades, n_trad
     if n_trades < min_trades:
         reasons.append(f"trades {n_trades} < minimum {min_trades}")
     p_sharpe = mc.get("p_value_sharpe")
+    # Permutation-Sharpe veto removed entirely (stats repair, 2026-11-27).
+    # Measured calibration: per-trade Sharpe is permutation-invariant except
+    # through compounding/ruin — simulated dispersion is structurally ~zero
+    # for EVERY cell, so the veto was noise in both directions: it certified
+    # the voided devz-era F7 artifacts and rejected genuine consistency
+    # (permutation-methodology-2026-11-26.md). The statistic stays in the
+    # payload as a measurement; edge certification lives in the block
+    # bootstrap CI, the random-entries null, and phase B — the instruments
+    # that can actually see the difference. The drawdown path IS
+    # order-dependent: p_value_max_dd remains as tail-risk evidence.
     if "error" in mc:
         reasons.append(f"permutation test inconclusive: {mc['error']}")
-    elif p_sharpe is not None and p_sharpe >= PERMUTATION_P_MAX:
-        reasons.append(f"permutation p {p_sharpe} >= {PERMUTATION_P_MAX} (ordering indistinguishable from luck)")
     ci_lo = bs.get("ci_lower")
     if "error" in bs:
         reasons.append(f"bootstrap inconclusive: {bs['error']}")

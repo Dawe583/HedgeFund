@@ -3,6 +3,7 @@ import json
 import logging
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -580,6 +581,56 @@ class AuditSignoff(Base):
     created_by: Mapped[str] = mapped_column(String(64), default="")
     document_ref: Mapped[str] = mapped_column(String(256))
     note: Mapped[str] = mapped_column(String(256), default="")
+
+class Prediction(Base):
+    """One forward-return prediction the scanner (trading/predictions.py)
+    committed when it scored an ML artifact — the F-7 track record's raw
+    material. A row is two halves written by two passes over time:
+
+    - the prediction half, written once at scan time: the artifact's own
+      numbers with their provenance (horizon, noise scale with its basis,
+      trained_through, the anchor bar the feature row stood on). A
+      prediction without its noise scale is a lie by omission, so noise
+      is non-nullable;
+    - the outcome half, NULL until the scorer's horizon-close pass fills
+      it: the realized forward return the candle store measured and the
+      direction verdict. correct_direction stays NULL for a realized
+      return of exactly zero — a coin-flip label on a tie would be
+      decoration, not evidence.
+
+    The unique key is (symbol, timeframe, artifact_kind, bar_close_time):
+    the same artifact scored on the same bar IS the same prediction, so a
+    re-scan is idempotent by construction, not by locking."""
+
+    __tablename__ = "predictions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ts: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    timeframe: Mapped[str] = mapped_column(String(8))
+    artifact_kind: Mapped[str] = mapped_column(String(16))  # frozen | rolling
+    horizon_bars: Mapped[int] = mapped_column(Integer)
+    predicted_return: Mapped[float] = mapped_column(Float)
+    noise: Mapped[float] = mapped_column(Float)
+    noise_basis: Mapped[str] = mapped_column(String(32))  # oof_rmse | pred_series_std
+    z_score: Mapped[float] = mapped_column(Float)
+    oof_corr: Mapped[float | None] = mapped_column(Float, nullable=True)  # frozen artifacts only
+    bar_close_time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    trained_through: Mapped[str] = mapped_column(String(64), default="")
+    artifact_file: Mapped[str] = mapped_column(String(256), default="")
+    outcome_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    scored_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    correct_direction: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_predictions_series_bar",
+            "symbol", "timeframe", "artifact_kind", "bar_close_time",
+            unique=True,
+        ),
+        Index("ix_predictions_unscored", "artifact_kind", "scored_at"),
+    )
+
 
 def make_engine(url: str | None = None):
     """A connection engine. Never DDL.

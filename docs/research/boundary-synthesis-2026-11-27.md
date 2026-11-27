@@ -1,10 +1,8 @@
 # The boundary synthesis — what the program can resolve, and what actually died
 
-Date: 2026-11-27. Status: **structural synthesis complete, verdict section
-PENDING** — the G/H phase-A sweeps are not yet run (compute deferred by
-owner decision); this document is written so those verdicts land in a
-frame that already exists, never retrofitted. Where a section depends on
-unrun measurements it says so in-line. Companions:
+Date: 2026-11-27. Status: complete — the G/H phase-A sweeps ran the same
+day and the verdict section now carries what was measured, exactly where
+the pre-registered reading stood. Companions:
 `stats-repair-verdict-2026-11-27.md` (the power re-read),
 `whole-system-analysis-2026-11-27.md` (the audit), the program doc, and
 the venue migration's evidence below.
@@ -89,26 +87,48 @@ residual uncertainty: small, bounded, and priced into future cell design.
 | content-keyed caches | digest over consumed data | repaired data can never serve stale signals |
 | walk-forward test-only re-basing | warmup out of fold verdicts | consistency evidence measures what it claims |
 
-## 5. What the pending verdicts will decide — pre-registered reading
+## 5. The verdicts — measured 2026-11-27, against the pre-registered reading
 
-Declared before the G/H sweeps run, so the reading cannot bend to the
-outcome:
+The pre-registration above is replaced by what happened; the reading
+cannot bend to the outcome because the outcome is written here once.
 
-- **G (funding-carry, perp truth):** the one mechanism in the zoo that is
-  a transfer, not a price forecast. Pass at power → the first validated
-  edge candidate of the corrected era, and phase B one-shot. Fail → the
-  timing hypothesis dies; pure hold-through-settlement carry becomes a
-  separate smaller declaration. `untestable` across the grid → the 4h
-  resolution was wrong, the family re-designs at 1h with a larger window.
-- **H (multi-week trend, daily):** the literature's most replicated
-  anomaly at the program's best-powered horizon. Pass anywhere → the
-  program's center of gravity moves to slow capital-compatible trading
-  (Arc B evidence). Fail at crypto AND GLD → time-series momentum is dead
-  at retail cost structures in this data, and the closure document's
-  strongest section writes itself.
-- **F12 (rolling retrain):** the regime-decay experiment — death at the
-  boundary is either adaptation lag (retraining fixes) or structural
-  (nothing fixes). Its sweep is queued behind the owner's compute budget.
+- **G — funding-carry, 16 phase-A cells, ALL rejected.** Mean Sharpe
+  −2.58, range −2.03 to −3.22 across BTC/SOL 4h perps, 211 total trades.
+  Not noise-that-needs-power: deeply negative, consistent across every
+  parameter combination, permutation p≈1. The mechanism that is a
+  transfer, not a forecast, does not merely fail to pay for timing — at
+  these parameters it is a consistent donation. Reading against the
+  pre-registration: the timing hypothesis is dead. What survives as an
+  undeclared question is the degenerate form — hold-through-settlement
+  carry with no timing at all, a perp-native funding harvest — and it is
+  a NEW declaration with its own budget, never a rescue of these rows.
+- **H — multi-week trend, 24 phase-A cells, ALL rejected.** Mean Sharpe
+  −0.11, range −1.48 to +1.24 over 2236 total trades. The distribution
+  is the verdict's texture: crypto cells cluster mildly positive (+0.2
+  to +0.5 at weekly lookbacks), GLD cells cluster negative (−0.4 to
+  −1.5). Nothing nears validation; permutation p values 0.1–0.95 with no
+  systematic tail. Reading against the pre-registration: at weekly-scale
+  lookbacks on retail cost curves, the most replicated anomaly in the
+  literature does not reproduce in this data — not death by underpower
+  (the z0.5 cells carried 29–455 positions), death by absence. The one
+  honest caveat: L63 monthly-lookback rows show Sharpe +0.9/+1.2 at
+  1–3 trades — exactly the unresolvable shape the power pre-check
+  predicted, evidence of nothing, written here precisely so nobody
+  resurrects it as a lead.
+- **F12 — still queued** behind the owner's compute budget; the rolling
+  retrain experiment is unchanged and unmeasured.
+
+## 5a. What the two verdicts jointly imply
+
+Two mechanism families — one a transfer, one the literature's sturdiest
+anomaly — both measured dead on correct venues at correct power within
+one sweep each. The cheap-and-fast adaptive-zoo direction is now negative
+on every load-bearing branch it has tested. Arc B's shape sharpens: the
+program's remaining hypotheses are the regime-adaptation experiment
+(F12), the degenerate carry form above, and directions the zoo has never
+contained. None of this rescues anything: the ledger's totals are what
+they are, and the honest number of validated strategies in the system
+remains zero.
 
 ## 6. What this synthesis deliberately does not say
 

@@ -1937,6 +1937,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trading/predictions/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Predictions Latest
+         * @description The ML track record's current state: one prediction per (symbol,
+         *     artifact_kind), each carrying its noise scale, noise basis, training
+         *     boundary and caveat — never a bare number. Empty when no scanner has
+         *     ever run: absence is the answer, not an error.
+         */
+        get: operations["predictions_latest_api_trading_predictions_latest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trading/predictions/track-record": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Predictions Track Record
+         * @description The scored history aggregated honestly: hit rate over decided
+         *     outcomes only, mean predicted vs mean realized, the pending/scored
+         *     split, and the sample size on every aggregate — a hit rate over four
+         *     outcomes is decoration and is labelled exactly that.
+         */
+        get: operations["predictions_track_record_api_trading_predictions_track_record_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trading/rails": {
         parameters: {
             query?: never;
@@ -5043,6 +5089,113 @@ export interface components {
             pnl_pct: number | null;
             /** Tier */
             tier: string;
+        };
+        /**
+         * MLPrediction
+         * @description One forward-return prediction from the ML track record (F-7): the
+         *     artifact's own numbers with their provenance. `noise` is non-nullable
+         *     by design — a prediction without its noise scale is a lie by omission.
+         *     `noise_basis` says which scale it is (oof_rmse for the frozen artifact,
+         *     pred_series_std for the rolling series, which carries nothing else).
+         *     The outcome half is explicit null until the horizon-close scorer fills
+         *     it; correct_direction stays null forever on a realized return of
+         *     exactly zero, because a tie is not a coin flip.
+         */
+        MLPrediction: {
+            /** Artifact Kind */
+            artifact_kind: string;
+            /** Bar Close Time */
+            bar_close_time: string | null;
+            /** Caveat */
+            caveat: string;
+            /** Correct Direction */
+            correct_direction: boolean | null;
+            /** Horizon Bars */
+            horizon_bars: number;
+            /** Id */
+            id: number;
+            /** Noise */
+            noise: number;
+            /** Noise Basis */
+            noise_basis: string;
+            /** Oof Corr */
+            oof_corr: number | null;
+            /** Outcome Return */
+            outcome_return: number | null;
+            /** Predicted Return */
+            predicted_return: number;
+            /** Scored At */
+            scored_at: string | null;
+            /** Symbol */
+            symbol: string;
+            /** Timeframe */
+            timeframe: string;
+            /** Trained Through */
+            trained_through: string;
+            /** Ts */
+            ts: string | null;
+            /** Z Score */
+            z_score: number;
+        };
+        /**
+         * MLPredictionSeriesRecord
+         * @description One series' scored aggregate. Every statistic carries its sample:
+         *     `hit_rate` is over DECIDED outcomes only (ties excluded), and
+         *     `small_sample` true means the count is below the honesty bar — the
+         *     rate is then decoration and the UI labels it exactly that.
+         */
+        MLPredictionSeriesRecord: {
+            /** Artifact Kind */
+            artifact_kind: string;
+            /** Decided */
+            decided: number;
+            /** Hit Rate */
+            hit_rate: number | null;
+            /** Hits */
+            hits: number;
+            /** Mean Predicted */
+            mean_predicted: number | null;
+            /** Mean Realized */
+            mean_realized: number | null;
+            /** Pending */
+            pending: number;
+            /** Sample Note */
+            sample_note: string;
+            /** Scored */
+            scored: number;
+            /** Small Sample */
+            small_sample: boolean;
+            /** Symbol */
+            symbol: string;
+            /** Ties */
+            ties: number;
+            /** Timeframe */
+            timeframe: string;
+            /** Total */
+            total: number;
+        };
+        /**
+         * MLPredictionsLatest
+         * @description GET /api/trading/predictions/latest — the newest committed prediction
+         *     per (symbol, artifact_kind). Empty is first-class: no scanner run means
+         *     no instrument reading, never a fabricated zero.
+         */
+        MLPredictionsLatest: {
+            /** Predictions */
+            predictions: components["schemas"]["MLPrediction"][];
+        };
+        /**
+         * MLPredictionTrackRecord
+         * @description GET /api/trading/predictions/track-record — per-series aggregates
+         *     plus the small-sample threshold the labelling stands on.
+         */
+        MLPredictionTrackRecord: {
+            /** Caveat */
+            caveat: string;
+            /** Series */
+            series: components["schemas"]["MLPredictionSeriesRecord"][];
+            /** Small Sample Threshold */
+            small_sample_threshold: number;
         };
         /**
          * NetWorthPoint
@@ -11224,6 +11377,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TradingClosedTrade"][];
+                };
+            };
+        };
+    };
+    predictions_latest_api_trading_predictions_latest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLPredictionsLatest"];
+                };
+            };
+        };
+    };
+    predictions_track_record_api_trading_predictions_track_record_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLPredictionTrackRecord"];
                 };
             };
         };

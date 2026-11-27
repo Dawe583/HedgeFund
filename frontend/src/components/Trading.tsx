@@ -35,7 +35,12 @@ import {
   type TradingRegistryVersion,
   getTradingMandates,
   getTradingOrderCards,
+  getPredictionsLatest,
+  getPredictionTrackRecord,
+  type MLPrediction,
+  type MLPredictionSeriesRecord,
 } from "../api/trading";
+import type { Schemas } from "../api/types";
 import { Blotter } from "../viz/Blotter";
 import { EquityFanChart } from "../viz/EquityFanChart";
 import { EquityChart } from "../viz/EquityChart";
@@ -1505,6 +1510,156 @@ function ChainDetails({ details }: { details: Record<string, unknown> }) {
   );
 }
 
+/* ---- The ML prediction track record (analysis F-7) ----------------------
+
+   The only forward-looking measurement the ML program produces, given a
+   memory: one row per (symbol, artifact) with the prediction denominated
+   in its own noise. The design law of the whole page applies with teeth:
+   a prediction without its noise scale and training boundary is a lie by
+   omission, so the strip renders the band, the basis of the noise, and the
+   boundary beside every number — and the hit rate wears its sample size
+   or doesn't render. */
+
+/** The prediction as a position inside its own noise band. ±3 noise units
+    span the strip; the prediction is the tick, zero the hairline — a z of
+    0.4 inside a ±3 window is what it honestly is: a whisper, not a signal.
+    This is exactly why the scale is drawn rather than a bare arrow with a
+    percentage. */
+function NoiseBand({ prediction, noise }: { prediction: number; noise: number }) {
+  // Position within ±3 noise units, clamped — a z beyond 3 IS rare and the
+  // clamp keeps it visible rather than pretending the band is wider.
+  const half = 3 * noise;
+  const frac = half > 0 ? Math.max(-1, Math.min(1, prediction / half)) : 0;
+  const x = 50 + frac * 48; // percent: center 50, edges 2/98
+  const zeroX = 50; // the band is centered on zero by construction — the prediction moves, not the world
+  return (
+    <span className="relative inline-block h-4 w-32 align-middle" aria-hidden="true">
+      {/* the band: ±1 noise shaded, ±3 noise framed — the noise scale IS the graphic */}
+      <span className="absolute left-[2%] right-[2%] top-1/2 h-px -translate-y-1/2 bg-rule" />
+      <span className="absolute top-1/2 h-2 w-0 -translate-y-1/2 border-l border-hair" style={{ left: "18.7%" }} />
+      <span className="absolute top-1/2 h-2 w-0 -translate-y-1/2 border-l border-hair" style={{ left: "81.3%" }} />
+      {/* zero: the no-prediction line, drawn quieter than the prediction */}
+      <span className="absolute top-0 bottom-0 border-l border-ink-faint/50" style={{ left: `${zeroX}%` }} />
+      {/* the prediction tick */}
+      <span
+        className={
+          "absolute top-0 bottom-0 w-[3px] " + (prediction >= 0 ? "bg-up" : "bg-down")
+        }
+        style={{ left: `calc(${x}% - 1px)` }}
+      />
+    </span>
+  );
+}
+
+function fmtPct(x: number, digits = 2): string {
+  return `${(x * 100).toFixed(digits)}%`;
+}
+
+/** The trained_through field is the artifact's boundary timestamp for
+    frozen models and the rolling series' structural embargo sentence —
+    rendered as-is in the title, shortened in view. Both are provenance,
+    never decoration. */
+function fmtBoundary(trainedThrough: string): string {
+  const iso = Date.parse(trainedThrough);
+  if (!Number.isNaN(iso)) {
+    return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  }
+  return trainedThrough.length > 28 ? trainedThrough.slice(0, 28) + "…" : trainedThrough;
+}
+
+export function PredictionsStrip({
+  predictions,
+  trackRecord,
+}: {
+  predictions: MLPrediction[] | null;
+  trackRecord: Schemas["MLPredictionTrackRecord"] | null;
+}) {
+  if (predictions === null) return <p className="text-ink-soft">Loading…</p>;
+  if (predictions.length === 0) {
+    return (
+      <EmptyState title="No predictions yet">
+        The scanner has never committed one — either it has not run, or no ML artifacts exist on
+        disk. Both are facts the instrument reports as nothing, never as an error. The scanner is
+        scripts/scan_predictions.py; its docstring carries the cron shape.
+      </EmptyState>
+    );
+  }
+  const recordByKey = new Map<string, MLPredictionSeriesRecord>();
+  for (const s of trackRecord?.series ?? []) recordByKey.set(`${s.symbol}:${s.artifact_kind}`, s);
+  return (
+    <div className={cardClass + " overflow-x-auto"}>
+      <table className="w-full border-collapse font-mono text-xs">
+        <thead>
+          <tr className="border-b border-rule text-[0.65rem] uppercase tracking-[0.1em] text-ink-soft">
+            <th className="px-3 py-1.5 text-left font-medium">Series</th>
+            <th className="px-3 py-1.5 text-left font-medium">Model</th>
+            <th className="px-3 py-1.5 text-right font-medium" title="predicted forward return over the horizon, denominated in the artifact's own noise as z">Pred / z</th>
+            <th className="px-3 py-1.5 text-left font-medium" title="the prediction inside its noise band — ±1σ shaded, ±3σ framed, zero at center">± noise</th>
+            <th className="px-3 py-1.5 text-left font-medium" title="the last bar the model has ever seen — frozen artifacts carry their training boundary, the rolling series its structural embargo">Trained through</th>
+            <th className="px-3 py-1.5 text-left font-medium" title="the anchor bar this prediction stands on">Bar</th>
+            <th className="px-3 py-1.5 text-right font-medium" title="scored outcomes at horizon close — hit rate over decided outcomes only, with its sample size">Track record</th>
+          </tr>
+        </thead>
+        <tbody>
+          {predictions.map((p) => {
+            const rec = recordByKey.get(`${p.symbol}:${p.artifact_kind}`);
+            const zAbs = Math.abs(p.z_score);
+            const provenance =
+              `${p.caveat} · noise basis: ${p.noise_basis} · trained through: ${p.trained_through}` +
+              (p.oof_corr !== null ? ` · out-of-fold corr ${p.oof_corr.toFixed(3)}` : "") +
+              ` · horizon ${p.horizon_bars} bars`;
+            return (
+              <tr key={`${p.symbol}:${p.artifact_kind}`} className="border-b border-hair last:border-b-0" title={provenance}>
+                <td className="px-3 py-1 text-ink">
+                  {p.symbol} <span className="text-ink-faint">{p.timeframe}</span>
+                </td>
+                <td className="px-3 py-1 text-ink-soft">{p.artifact_kind}</td>
+                <td className="px-3 py-1 text-right tabular-nums">
+                  <span className={p.predicted_return >= 0 ? "text-up" : "text-down"}>
+                    {p.predicted_return >= 0 ? "▲" : "▼"} {fmtPct(p.predicted_return)}
+                  </span>{" "}
+                  <span className={"tabular-nums " + (zAbs >= 1 ? "text-ink" : "text-ink-faint")} title={`z = prediction / noise — ${zAbs < 1 ? "below one noise unit: inside the model's own error scale" : "beyond one noise unit"}`}>
+                    z {p.z_score.toFixed(2)}
+                  </span>
+                </td>
+                <td className="px-3 py-1">
+                  <NoiseBand prediction={p.predicted_return} noise={p.noise} />
+                </td>
+                <td className="px-3 py-1 text-ink-soft">{fmtBoundary(p.trained_through)}</td>
+                <td className="px-3 py-1 text-ink-soft">
+                  {p.bar_close_time ? new Date(p.bar_close_time).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "—"}
+                </td>
+                <td className="px-3 py-1 text-right tabular-nums">
+                  {!rec || rec.decided === 0 ? (
+                    <span className="text-ink-faint" title={rec ? `${rec.pending} pending, none scored yet` : "nothing scored yet"}>
+                      {rec && rec.pending > 0 ? `${rec.pending} pending` : "—"}
+                    </span>
+                  ) : (
+                    <span
+                      className={rec.small_sample ? "text-ink-faint" : "text-ink"}
+                      title={rec.sample_note + (rec.mean_predicted !== null ? ` · mean predicted ${fmtPct(rec.mean_predicted)} vs mean realized ${fmtPct(rec.mean_realized ?? 0)}` : "")}
+                    >
+                      {rec.hit_rate !== null ? fmtPct(rec.hit_rate, 0) : "—"}
+                      <span className="text-ink-faint"> /{rec.decided}</span>
+                      {rec.small_sample && <span title={rec.sample_note}> ⚠</span>}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="border-t border-hair px-3 py-1.5 text-[0.7rem] text-ink-faint">
+        {predictions[0]?.caveat} — hit rates over decided outcomes only, with n beside them;
+        below {trackRecord?.small_sample_threshold ?? 10} the rate is decoration and the strip says so.
+      </p>
+    </div>
+  );
+}
+
+export const PredictionsStripForTest = PredictionsStrip;
+
 export function SignalsTape({ data }: { data: TradingSignalsToday | null }) {
   if (data === null) return <p className="text-ink-soft">Loading…</p>;
   if (data.signals.length === 0) {
@@ -2040,6 +2195,8 @@ export default function Trading() {
   const [models, setModels] = useState<TradingModelRegistry | null>(null);
   const [mandates, setMandates] = useState<TradingMandate[] | null>(null);
   const [orderCards, setOrderCards] = useState<TradingOrderCard[] | null>(null);
+  const [predictions, setPredictions] = useState<MLPrediction[] | null>(null);
+  const [predictionRecord, setPredictionRecord] = useState<Schemas["MLPredictionTrackRecord"] | null>(null);
   const [mandatesError, setMandatesError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -2109,6 +2266,16 @@ export default function Trading() {
       .catch(() => {
         /* supplementary — failure renders as no card table, never a blank section */
       });
+    getPredictionsLatest()
+      .then((p) => alive && setPredictions(p))
+      .catch(() => {
+        /* the instrument's failure renders as no strip, never a blank page */
+      });
+    getPredictionTrackRecord()
+      .then((r) => alive && setPredictionRecord(r))
+      .catch(() => {
+        /* same discipline — the strip renders the predictions without the record */
+      });
     return () => {
       alive = false;
     };
@@ -2158,6 +2325,17 @@ export default function Trading() {
             />
           </div>
         </div>
+      </Section>
+
+      <Section
+        title="Predictions"
+        hint="The ML program's only forward-looking measurement, given a memory: every prediction carries its noise scale and training boundary, and the scanner's track record is scored at horizon close against the candle store. A hit rate wears its sample size — small samples are decoration and are labelled exactly that."
+      >
+        {predictions !== null ? (
+          <PredictionsStrip predictions={predictions} trackRecord={predictionRecord} />
+        ) : (
+          <p className="text-sm text-ink-soft">Loading the predictions…</p>
+        )}
       </Section>
 
       <Section

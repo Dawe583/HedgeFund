@@ -297,3 +297,32 @@ export async function getTradingMandates(): Promise<TradingMandate[]> {
 export async function getTradingOrderCards(): Promise<TradingOrderCard[]> {
   return (await api.get<Schemas["TradingOrderCards"]>("/api/trading/order-cards")).data.cards;
 }
+
+/* ---- The ML prediction track record (analysis F-7). Same transcription
+   rule: the pydantic models are canonical; what the strip renders is what
+   the scanner committed, noise scale and training boundary included,
+   because a prediction without them is a lie by omission. */
+
+/** One forward-return prediction. `noise` is non-nullable by backend
+    design; `noise_basis` says WHICH scale it is — oof_rmse for the frozen
+    artifact, pred_series_std for the rolling series, and the difference
+    matters because only one of them is an error measurement. The outcome
+    half is explicit null until the horizon-close scorer fills it;
+    correct_direction stays null on a realized return of exactly zero. */
+export type MLPrediction = Schemas["MLPrediction"];
+
+/** One series' scored aggregate. `hit_rate` is over decided outcomes only
+    and `small_sample` is the backend's own verdict that the sample is
+    decoration — the strip's job is to show the label, never to argue
+    with it. */
+export type MLPredictionSeriesRecord = Schemas["MLPredictionSeriesRecord"];
+
+export async function getPredictionsLatest(): Promise<MLPrediction[]> {
+  return (await api.get<Schemas["MLPredictionsLatest"]>("/api/trading/predictions/latest")).data
+    .predictions;
+}
+
+export async function getPredictionTrackRecord(): Promise<Schemas["MLPredictionTrackRecord"]> {
+  return (await api.get<Schemas["MLPredictionTrackRecord"]>("/api/trading/predictions/track-record"))
+    .data;
+}

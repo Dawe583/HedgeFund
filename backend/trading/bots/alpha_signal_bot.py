@@ -108,29 +108,37 @@ class AlphaSignal(BaseStrategy):
 def _alpha_wide_cached(compute_fn, research_db: str, symbols: list[str], timeframe: str):
     """Compute-once-read-many alpha panel, cached as a pickle beside the
     research data. Mutable module globals are banned by project rule; the
-    file cache is the honest equivalent — the panel is a deterministic
-    function of (alpha, universe, timeframe, candle data), invalidation is
-    deleting the file, and a stale cache is impossible in practice because
-    backtests run against fixed historical windows."""
+    file cache is the honest equivalent. The key is CONTENT-keyed: the
+    digest covers the whole panel the alpha consumed, so re-ingested or
+    repaired candles produce a new key rather than a stale hit — the old
+    (module, symbols, timeframe) key fed pre-repair panels to live signals
+    forever, which is exactly the F-8 failure. The panel must therefore be
+    loaded before the lookup: the cache saves the alpha computation (the
+    expensive part), not the candle read. Writing evicts same-alpha,
+    same-universe predecessors — the pre-repair panels."""
     import hashlib
     import pickle
     from pathlib import Path
+
+    from trading.cacheutil import artifact_file, panel_digest, write_artifact
 
     key = hashlib.sha256(
         (compute_fn.__module__ + "|".join(sorted(symbols)) + timeframe).encode()
     ).hexdigest()[:12]
     cache_dir = Path(research_db.replace("sqlite:///", "")).parent / "alpha_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    path = cache_dir / f"{compute_fn.__module__.split('.')[-1]}-{timeframe}-{key}.pkl"
-    if path.exists():
-        with open(path, "rb") as fh:
-            return pickle.load(fh)
+    stem = f"{compute_fn.__module__.split('.')[-1]}-{timeframe}-{key}"
+
     from trading.alpha_bench import load_panel
 
     panel = load_panel(research_db, symbols, timeframe)
+    digest = panel_digest(panel)
+    path = artifact_file(cache_dir, stem, digest)
+    if path.exists():
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
     wide = compute_fn(panel)
-    with open(path, "wb") as fh:
-        pickle.dump(wide, fh)
+    write_artifact(cache_dir, stem, digest, wide)
     return wide
 
 

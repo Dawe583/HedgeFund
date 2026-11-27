@@ -265,6 +265,39 @@ def evaluate_candidate(
             and abs(core["metrics"].get("sharpe") or 0.0) >= min_detectable_sharpe(core["n_trades"])
         ),
     }
+    verdict = core["verdict"]
+    untestable_reason = None
+    if phase == "B" and verdict == "rejected" and core["n_trades"] >= 1:
+        # Power bar on confirmation (program amendment 2026-11-27): a
+        # phase-B cell too small to see the edge it was confirming never
+        # measured life or death — it measured blindness. The reference is
+        # the candidate's newest honest phase-A row for this symbol; without
+        # one the cell's own observed sharpe is the best available scale.
+        # Underpowered cells ledger as `untestable`, never `rejected` — the
+        # power re-read found 13 of 29 historical phase-B verdicts were
+        # uninterpretable as written, and the vocabulary now says so at
+        # write time instead of post-hoc.
+        mds = min_detectable_sharpe(core["n_trades"])
+        ref_sharpe = None
+        ref_row = conn.execute(
+            "select sharpe from search_ledger where family = ? and candidate = ?"
+            " and symbol = ? and timeframe = ? and phase = 'A' and verdict != 'error'"
+            " order by id desc limit 1",
+            (candidate.family, candidate.name, symbol.upper(), candidate.timeframe),
+        ).fetchone()
+        if ref_row and ref_row[0] is not None and float(ref_row[0]) > 0:
+            ref_sharpe = float(ref_row[0])
+        else:
+            own = metrics.get("sharpe")
+            if own is not None and abs(float(own)) > 0:
+                ref_sharpe = abs(float(own))
+        if ref_sharpe is not None and mds > ref_sharpe:
+            verdict = "untestable"
+            untestable_reason = (
+                f"untestable: min-detectable-sharpe {round(mds, 3)} exceeds the reference edge "
+                f"{round(ref_sharpe, 3)} at {core['n_trades']} trades — the cell was blind to what it "
+                f"was confirming; redesign for power, never re-run noise"
+            )
     # budget enforcement (analysis F-6, now code): the family's declared
     # budget is counted against spent ledger rows — phase A cells only,
     # phase B confirmations are the protocol's own continuation, not new
@@ -288,7 +321,9 @@ def evaluate_candidate(
     # the power line rides inside the reasons list as a machine-prefixed
     # entry — the list shape every consumer already parses stays intact,
     # and the resolution label is visible verbatim wherever reasons render.
-    reasons_with_power = list(core["reasons"]) + ([budget_flag] if budget_flag else []) + [
+    reasons_with_power = list(core["reasons"]) + ([budget_flag] if budget_flag else []) + (
+        [untestable_reason] if untestable_reason else []
+    ) + [
         f"power: min-detectable-sharpe {power_label['min_detectable_sharpe']} at {core['n_trades']} trades"
         + (" (resolvable)" if power_label["resolvable"] else " (UNRESOLVABLE - the cell cannot see its own edge)")
     ]
@@ -300,7 +335,7 @@ def evaluate_candidate(
         "timeframe": candidate.timeframe,
         "params_json": json.dumps(candidate.params, sort_keys=True),
         "phase": phase,
-        "verdict": core["verdict"],
+        "verdict": verdict,
         "trades_n": core["n_trades"],
         "permutation_p": core["p_sharpe"],
         "sharpe_ci_lo": core["bs"].get("ci_lower"),

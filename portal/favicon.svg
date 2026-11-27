@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- The evidence-room mark: the libella beam rendered as a candlestick
+       chart — the wealth plane's scales re-drawn in the trading plane's own
+       alphabet. Ink on the terminal's deep-green black, pans in evidence
+       green, the beam's pivot in measured gold. Same geometry family as the
+       app's libella: one beam, two pans, one pivot — here the pans ARE
+       candles, because what this room weighs is evidence. -->
+  <rect width="200" height="200" rx="30" fill="#0a0c0a"/>
+  <g transform="translate(20,20) scale(0.8)">
+    <!-- beam, inset like the app's libella -->
+    <rect x="10" y="18" width="180" height="20" fill="#c8d3c4"/>
+    <!-- pivot, centered under the beam -->
+    <polygon points="84,38 116,38 106,104 94,104" fill="#c0a06a"/>
+    <rect x="91" y="104" width="18" height="76" fill="#c8d3c4"/>
+    <!-- left pan as a candlestick hung off the beam: wick as the chain,
+         body as the pan — an up candle in evidence green -->
+    <rect x="38" y="38" width="5" height="26" fill="#7dff9a"/>
+    <rect x="28" y="64" width="26" height="34" fill="#7dff9a"/>
+    <rect x="38" y="98" width="5" height="12" fill="#7dff9a"/>
+    <!-- right pan the same shape in dead-red: the room weighs rejections
+         too — mostly rejections -->
+    <rect x="157" y="38" width="5" height="26" fill="#ff6b6b"/>
+    <rect x="147" y="64" width="26" height="34" fill="#ff6b6b"/>
+    <rect x="157" y="98" width="5" height="12" fill="#ff6b6b"/>
+  </g>
+</svg>

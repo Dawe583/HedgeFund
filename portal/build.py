@@ -150,9 +150,15 @@ def inline(text: str) -> str:
 def page(title: str, body: str, nav: str = "") -> str:
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<meta property="og:title" content="{html.escape(title)} — HedgeFund Evidence Room">
+<meta property="og:description" content="The append-only evidence room of a research program: every measured cell, voids included. Most of it is measured evidence that things do not work.">
 <title>{html.escape(title)} — HedgeFund Evidence Room</title>
 <style>{STYLE}</style></head><body>
-<header><a href="index.html">← evidence room</a></header>
+<header style="display:flex;align-items:center;gap:0.7rem;margin-bottom:1.2rem">
+<img src="favicon.svg" alt="" width="26" height="26" style="border-radius:5px">
+<a href="index.html" style="letter-spacing:0.08em">HEDGEFUND <span class="dim">/ evidence room</span></a>
+</header>
 {body}
 <footer class="meta" style="margin-top:3rem">generated from the repository's own documents — nothing here is investment advice; most of it is measured evidence that things do NOT work</footer>
 </body></html>"""
@@ -203,6 +209,10 @@ def ledger_rows() -> list[dict]:
 
 def build() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
+    import shutil as _shutil
+    _portal_dir = Path(__file__).resolve().parent
+    if (_portal_dir / "favicon.svg").exists():
+        _shutil.copy(_portal_dir / "favicon.svg", OUT / "favicon.svg")
     docs = sorted(DOCS.glob("*.md"))
     pages = []
     for doc in docs:

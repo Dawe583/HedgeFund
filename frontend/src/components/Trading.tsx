@@ -41,6 +41,7 @@ import { EquityFanChart } from "../viz/EquityFanChart";
 import { EquityChart } from "../viz/EquityChart";
 import { fromApiCurve } from "../viz/equityData";
 import { EmptyState } from "./Emblem";
+import LedgerBrowser from "./LedgerBrowser";
 import { apiError, btnClass, cardClass, inputClass, Section, statLabelClass } from "./ui";
 import {
   divergenceBudgetsOf,
@@ -2182,6 +2183,12 @@ export default function Trading() {
         hint="Every backtest the research pipeline finished, with the validation gate's verdict: the permutation test, the bootstrap Sharpe interval and walk-forward consistency."
         note="Figures come from the run row itself — hover any number for its run and date. A run without validation shows dashes, not zeros."
       >
+        <div className="mb-4">
+          <h4 className={statLabelClass}>Sweep ledger</h4>
+          <div className="mt-1">
+            <LedgerBrowser />
+          </div>
+        </div>
         <ResearchSection runs={runs} error={runsError} />
         <div className="mt-4">
           <h4 className={statLabelClass}>Validation queue</h4>

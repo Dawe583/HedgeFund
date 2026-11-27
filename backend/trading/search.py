@@ -250,6 +250,28 @@ def evaluate_candidate(
     )
     elapsed = round(time.monotonic() - started, 2)
     metrics = core["metrics"]
+    # Power resolution label (stats repair 2026-11-27): could a test of
+    # this size see the edge it measured? The observed sharpe is its own
+    # reference — degenerate for phase A (the cell is the measurement) but
+    # honest about resolution: a cell that cannot see its own result was
+    # noise before it ran. Phase-B interpretation against the in-sample
+    # edge lives in scripts/power_reread.py pairing.
+    from trading.research import min_detectable_sharpe
+
+    power_label = {
+        "min_detectable_sharpe": round(min_detectable_sharpe(core["n_trades"]), 3),
+        "resolvable": bool(
+            core["n_trades"] >= 1
+            and abs(core["metrics"].get("sharpe") or 0.0) >= min_detectable_sharpe(core["n_trades"])
+        ),
+    }
+    # the power line rides inside the reasons list as a machine-prefixed
+    # entry — the list shape every consumer already parses stays intact,
+    # and the resolution label is visible verbatim wherever reasons render.
+    reasons_with_power = list(core["reasons"]) + [
+        f"power: min-detectable-sharpe {power_label['min_detectable_sharpe']} at {core['n_trades']} trades"
+        + (" (resolvable)" if power_label["resolvable"] else " (UNRESOLVABLE - the cell cannot see its own edge)")
+    ]
     row = {
         "ts": pd.Timestamp.now(tz="UTC").isoformat(),
         "family": candidate.family,
@@ -272,7 +294,7 @@ def evaluate_candidate(
         "data_end": str(df.index[-1]),
         "data_rows": len(df),
         "seed": seed,
-        "reasons_json": json.dumps(core["reasons"]),
+        "reasons_json": json.dumps(reasons_with_power),
         "elapsed_s": elapsed,
         "wf_windows_json": json.dumps(
             core.get("validation_payload", {}).get("walk_forward", {}).get("windows", [])

@@ -133,6 +133,19 @@ class PaperEngine:
         self.forecaster = Forecaster(self.session_factory)
         self._last_forecast: dict[str, float] = {}
         self._last_seen_bar: dict[str, object] = {}  # bot -> last evaluated bar ts
+        # auto-trip latch for the automatic drawdown kill-switch — distinct
+        # from the manual __killswitch row. Persisted in the kv store
+        # (kill_tripped / kill_trip_meta) because a restart must not be a
+        # risk reset (F-4 hole 2); _init_state reloads it. The operator
+        # un-kill is risk.reset_kill_state — clearing the manual row alone
+        # would silently leave this latch set.
+        self._auto_kill = False
+        # the last close the evaluation loop saw — _equity_now falls back to
+        # it when no close is passed, so the periodic equity/peak path marks
+        # open positions too (the honest approximation: staleness is bounded
+        # by the tick cadence, and the alternative — realized-only peak
+        # tracking — is exactly the inconsistency F-4 named)
+        self._last_close_seen = None
         self.killed = False
         self._stop = False
         self._last_analyst_run = float("-inf")  # fire on first tick
@@ -156,11 +169,19 @@ class PaperEngine:
 
     # ------------------------------------------------------------------ state
     def _init_state(self) -> None:
-        """Load peak_equity baseline from the kv store so restarts keep it."""
+        """Load peak_equity and the auto-kill latch from the kv store so
+        restarts keep both. A previously tripped engine STAYS killed across
+        the restart — restarting the process is not a risk reset (F-4 hole
+        2). The only way back is the deliberate operator reset,
+        risk.reset_kill_state, wired into the manual killswitch endpoint."""
         session = self.session_factory()
         try:
             peak = get_state(session, "peak_equity")
             self.peak_equity = float(peak) if peak is not None else self.s.paper_equity_start
+            self._auto_kill = bool(get_state(session, "kill_tripped", False))
+            if self._auto_kill:
+                log.error("auto kill-switch latch persisted — staying killed (meta: %s)",
+                          get_state(session, "kill_trip_meta"))
         finally:
             session.close()
 
@@ -276,8 +297,43 @@ class PaperEngine:
         except Exception:
             log.exception("agent rebuild failed — keeping previous dict")
 
+    def _trip_auto_kill(self, session, equity: float) -> None:
+        """The automatic drawdown kill-switch fires: latch in memory AND
+        persist the trip with its metadata into the kv store beside
+        peak_equity. A restart reloads the latch (see _init_state) — the
+        trip memory must not die with the process. The operator reset is
+        risk.reset_kill_state; this function has no inverse here by design."""
+        self._auto_kill = True
+        dd = (self.peak_equity - equity) / self.peak_equity if self.peak_equity > 0 else 0.0
+        log.error("KILL SWITCH — equity %.2f vs peak %.2f (drawdown %.4f) — persisting trip",
+                  equity, self.peak_equity, dd)
+        try:
+            set_state(session, "kill_tripped", True)
+            set_state(session, "kill_trip_meta", {
+                "ts": dt.datetime.now(dt.UTC).isoformat(),
+                "equity_marked": round(equity, 6),
+                "peak_equity": round(self.peak_equity, 6),
+                "drawdown_pct": round(dd, 6),
+            })
+            session.commit()
+        except Exception:
+            # a failed persist must not un-trip the in-memory latch — the
+            # log above is the evidence and the next trip attempt retries
+            log.exception("kill trip persist failed — latch holds in memory only")
+            session.rollback()
+
     def _equity_now(self, session, last_close: float | None = None) -> tuple[float, float]:
-        """(equity_marked, realized_pnl). Equity includes unrealized PnL."""
+        """(equity_marked, realized_pnl). Equity includes unrealized PnL —
+        consistently: when no close is passed the last close the evaluation
+        loop saw is used, so the periodic equity/peak path measures the same
+        marked quantity as the signal-time path. The stored close is the
+        honest approximation (staleness bounded by the tick cadence); the
+        pre-F-4 alternative — unrealized silently zero on that path — made
+        peak tracking blind to exactly the drawdowns the kill-switch exists
+        for. Kernel parity: validation's rails measure realized + unrealized
+        at bar close too, and this is the same quantity."""
+        if last_close is None:
+            last_close = self._last_close_seen
         realized = sum(t.pnl for t in session.execute(select(Trade)).scalars())
         unrealized = 0.0
         if last_close is not None:
@@ -495,8 +551,7 @@ class PaperEngine:
         equity, _ = self._equity_now(session, price)
         day_start = self._day_start_equity(session, equity)
         if self.risk.kill_switch(self.peak_equity, equity):
-            self.killed = True
-            log.error("KILL SWITCH — equity %.2f vs peak %.2f", equity, self.peak_equity)
+            self._trip_auto_kill(session, equity)
             return
         if self.risk.daily_loss_breached(day_start, equity):
             log.warning("daily loss limit hit — %s paused", bot)
@@ -687,14 +742,20 @@ class PaperEngine:
         session = self.session_factory()
         try:
             self._ensure_bot_rows(session)
-            # kill-switch lifecycle: dashboard row is source of truth each tick
+            # kill-switch lifecycle: two independent latches OR together —
+            # the manual __killswitch row (dashboard) and the automatic
+            # drawdown trip, re-read from the kv store every tick so the
+            # operator's reset_kill_state takes effect without a restart.
+            # Nothing here CLEARS either latch on its own: un-killing is
+            # deliberate or it is nothing.
             ks = killswitch_state(self.session_factory)
-            if ks["tripped"] and not self.killed:
-                self.killed = True
-                log.error("kill-switch engaged via dashboard")
-            elif not ks["tripped"] and self.killed:
-                self.killed = False
+            self._auto_kill = bool(get_state(session, "kill_tripped", False))
+            killed_now = ks["tripped"] or self._auto_kill
+            if killed_now and not self.killed:
+                log.error("kill-switch engaged (manual=%s auto=%s)", ks["tripped"], self._auto_kill)
+            elif not killed_now and self.killed:
                 log.info("kill-switch cleared — resuming")
+            self.killed = killed_now
             stale = self._stale_feed(session)
             if stale:
                 log.warning("stale feed: newest 1m candle older than %ds", STALE_CANDLE_S)
@@ -725,6 +786,7 @@ class PaperEngine:
                     ]
                     feats = build_features(candles_to_df(rows))
                     last = rows[-1]
+                    self._last_close_seen = float(last["close"])
 
                     await self._maybe_close_positions(session, last)
 
@@ -745,6 +807,14 @@ class PaperEngine:
                 eq, _ = self._equity_now(session)
                 self.peak_equity = max(self.peak_equity, eq)
                 self._persist_peak(session)
+                # the kill-switch is a PER-TICK rail, not a signal-time one:
+                # an underwater open position must trip it even when no bot
+                # is trying to enter — the equity above is marked (the last
+                # close fallback in _equity_now), so this measures the same
+                # quantity the kernel rails measure at bar close
+                if not self._auto_kill and self.risk.kill_switch(self.peak_equity, eq):
+                    self._trip_auto_kill(session, eq)
+                    self.killed = True
                 self._tick_count_since_point = getattr(self, "_tick_count_since_point", 0) + 1
                 moved = (
                     self._last_equity_point is None

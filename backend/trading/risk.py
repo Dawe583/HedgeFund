@@ -88,6 +88,34 @@ def set_killswitch(session_factory, tripped: bool, note: str = "") -> dict:
         session.close()
 
 
+def reset_kill_state(session_factory, note: str = "") -> dict:
+    """The deliberate operator un-kill (F-4 hole 2, 2026-11-27): clears the
+    manual `__killswitch` row AND the auto-trip state the paper engine
+    persists beside peak_equity. One helper for both because un-killing only
+    the manual row would leave the automatic drawdown trip latched in the kv
+    store — a restart would silently re-kill the desk, and 'I turned it off'
+    would be a lie. The trip metadata (`kill_trip_meta`) is intentionally
+    KEPT: it is the evidence of what the market did, not a state to erase —
+    the reset clears the latch, never the record.
+
+    kv keys: `kill_tripped` (the latch) and `kill_trip_meta` (ts and
+    drawdown at the trip, written by the paper engine at the instant it
+    fires). The validation kernel deliberately has no such persistence: a
+    backtest is one measurement and starts fresh by design; paper is a
+    continuous life, and restarting the process is not a risk reset.
+    """
+    from trading.models import set_state
+
+    out = set_killswitch(session_factory, False, note or "operator reset — kill state cleared")
+    session = session_factory()
+    try:
+        set_state(session, "kill_tripped", False)
+        session.commit()
+    finally:
+        session.close()
+    return {**out, "auto_trip_cleared": True}
+
+
 def portfolio_equity(session, start: float, positions: list | None = None) -> float:
     """Equity = start + realized PnL + unrealized PnL of open positions.
 

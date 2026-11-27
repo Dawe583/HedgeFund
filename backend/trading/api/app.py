@@ -28,7 +28,7 @@ from trading.models import (
     make_session_factory,
 )
 from trading import risk_guard
-from trading.risk import RiskManager, killswitch_state, set_killswitch
+from trading.risk import RiskManager, killswitch_state, reset_kill_state, set_killswitch
 from trading.storage import load_candles_df
 
 log = logging.getLogger(__name__)
@@ -490,6 +490,13 @@ class KillSwitchRequest(BaseModel):
 @app.post("/api/risk/killswitch")
 async def killswitch(req: KillSwitchRequest, authorization: str | None = Header(default=None)):
     _require_engine_token(authorization)
+    # un-killing is the deliberate operator reset: the manual row AND the
+    # persisted auto-trip latch clear together (reset_kill_state) — clearing
+    # only the manual row would leave a restart to silently re-kill the
+    # desk. Tripping stays the plain manual row: the auto latch belongs to
+    # the drawdown rail alone.
+    if not req.tripped:
+        return await asyncio.to_thread(reset_kill_state, session_factory, req.note)
     return await asyncio.to_thread(set_killswitch, session_factory, req.tripped, req.note)
 
 

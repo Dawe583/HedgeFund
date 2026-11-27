@@ -1,0 +1,29 @@
+# Evidence-room continuous deployment. Design note: the repo deliberately
+# runs no CI verification (hedge-fund-os.md — all verification is local);
+# this workflow is deployment-only and changes nothing about that.
+name: deploy-portal
+on:
+  push:
+    branches: [main]
+    paths:
+      - "portal/**"
+      - "docs/research/**"
+      - "backend/data/ledger_snapshot.json"
+      - ".github/workflows/deploy-portal.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the evidence room
+        run: python3 portal/build.py
+      - name: Deploy to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: prj_Jm3TiCsk7IECdcaF7NrdUQsVGnEp
+        run: python3 portal/deploy.py

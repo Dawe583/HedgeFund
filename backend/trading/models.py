@@ -374,7 +374,7 @@ class BacktestValidation(Base):
     prob_positive: Mapped[float | None] = mapped_column(Float, nullable=True)
     wf_positive_folds: Mapped[int] = mapped_column(Integer, default=0)
     wf_total_folds: Mapped[int] = mapped_column(Integer, default=0)
-    verdict: Mapped[str] = mapped_column(String(16))  # validated | rejected | insufficient_data
+    verdict: Mapped[str] = mapped_column(String(16))  # validated | rejected | insufficient_data | control (instrumentation designation — never a verdict on alpha, see registry.register_control)
     reasons_json: Mapped[str] = mapped_column(String(2048), default="[]")
     validation_json: Mapped[str] = mapped_column(Text, default="{}")
     run_id: Mapped[int | None] = mapped_column(ForeignKey("backtest_runs.id"), nullable=True)

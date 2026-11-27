@@ -11,7 +11,10 @@ machine:
 Transition guards (the only write paths in this module):
 - research → validated: ONLY with a backtest_validations row for this exact
   version — verdict "validated", matching bot/strategy key and parameter
-  set. No evidence, no transition.
+  set. No evidence, no transition. ONE structural exception: verdict
+  "control" on versions whose code hash matches a registered
+  instrumentation-control class (see register_control) — the control never
+  passed validation and its rows say so in every provenance surface.
 - validated → paper: unconditional, automatic — paper is free. (The CLI
   chains it the moment validation lands.)
 - paper → candidate_live: REFUSES without an approvals row for this version
@@ -51,6 +54,21 @@ from trading.models import (
 )
 
 STATES = ("research", "validated", "paper", "candidate_live", "live")
+
+# Instrumentation controls (trading/bots/random_control_bot.py): strategies
+# whose expectations are known by construction — never alpha. The registry
+# binds this claim STRUCTURALLY: a version may walk the control path only
+# when its code_hash matches the control class's own hash, so the honesty
+# of the ledger does not depend on anyone's notes being truthful. Controls
+# are hard-frozen at paper: the human-gated edges beyond it refuse them
+# outright, because there is no alpha an approval could approve.
+def _control_code_hashes() -> set[str]:
+    """Content hashes of every class the registry accepts as an
+    instrumentation control. Lazy import: bots must never become a registry
+    dependency at module load."""
+    from trading.bots.random_control_bot import RandomControl
+
+    return {code_hash_of(RandomControl)}
 
 # forward edges and what each demands: the guard table the design's prose
 # compiles to. candidate_live→live lists the approval it needs AND refuses
@@ -190,7 +208,20 @@ def transition(session, version_id: int, to_state: str, *, validation_id: int | 
         row = session.get(BacktestValidation, validation_id)
         if row is None:
             raise TransitionRefused(f"validation row {validation_id} does not exist")
-        if row.verdict != "validated":
+        if row.verdict == "control":
+            # the instrumentation-control path (see register_control): the
+            # row is NOT a verdict on alpha — it is the designation itself,
+            # and the guard accepts it only when the version's code hash
+            # provably IS a control class. An alpha candidate cannot reach
+            # validated through this door without literally becoming the
+            # control's source code.
+            if version.code_hash not in _control_code_hashes():
+                raise TransitionRefused(
+                    "validation row verdict 'control' applies only to versions whose "
+                    "code hash matches a registered instrumentation-control class — "
+                    "this version is not one, so the row is no evidence at all"
+                )
+        elif row.verdict != "validated":
             raise TransitionRefused(
                 f"validation row {validation_id} says {row.verdict!r}, not 'validated'"
             )
@@ -206,6 +237,14 @@ def transition(session, version_id: int, to_state: str, *, validation_id: int | 
             )
         evidence = f"validation:{validation_id}"
     elif edge == ("paper", "candidate_live"):
+        if version.code_hash in _control_code_hashes():
+            # instrumentation controls are hard-frozen at paper: there is no
+            # alpha an approval card could approve, and a control in
+            # candidate_live would be the ledger lying about what it holds.
+            raise TransitionRefused(
+                "instrumentation controls never leave paper — there is no alpha "
+                "to approve; the control's expectations are known by construction"
+            )
         approval = (
             session.execute(
                 select(Approval).where(
@@ -277,6 +316,117 @@ def validate_and_promote(session, version_id: int, validation_id: int) -> list[S
     out = [transition(session, version_id, "validated", validation_id=validation_id)]
     out.append(transition(session, version_id, "paper", note="automatic — paper is free"))
     return out
+
+
+def register_control(
+    session,
+    key: str,
+    name: str,
+    cls,
+    *,
+    timeframe: str,
+    universe: list[str],
+    params: dict,
+    budget: "DivergenceBudget | None" = None,
+) -> dict:
+    """Register an INSTRUMENTATION CONTROL into paper — the negative control
+    whose expectations are known by construction (trading/bots/
+    random_control_bot.py). The desk's operational plane has never run under
+    load with an empty roster; the control exists so veto tape, divergence
+    measurement, reconciliation and lifecycle transitions finally run
+    against a flow whose truth is known in advance.
+
+    Honesty design — read before copying this pattern:
+
+    1. The control NEVER passed validation, and nothing here pretends it
+       did. The validation row written below carries verdict 'control' —
+       a designation, not a verdict on evidence. Its numeric fields are
+       zeros and empty strings because no backtest exists; inventing
+       numbers would be the lie this function exists to avoid.
+    2. validate_and_promote is deliberately NOT used: its chain implies the
+       validation gate's machinery ran and passed. Here each transition's
+       note states precisely what the row means — the validated state is a
+       lifecycle formality for roster plumbing, not a verdict.
+    3. The binding is structural, not clerical: transition() accepts the
+       'control' verdict only for versions whose code_hash matches the
+       control class's own source hash, and refuses controls past paper
+       outright. The honesty of the ledger therefore survives careless
+       callers of this function. NOT idempotent: every call writes a new
+       version row (same params, next version number) — registration is an
+       act, and the driving script checks the roster before calling.
+    4. The declaration travels in the version's params (declared_role) and
+       in every transition note — roster dumps, divergence records and
+       signal tapes all restate what this is."""
+    from trading.bots.random_control_bot import CONTROL_DECLARATION
+
+    if cls.__name__ != "RandomControl" or code_hash_of(cls) not in _control_code_hashes():
+        raise TransitionRefused(
+            "register_control registers instrumentation controls only — "
+            f"{cls.__name__} is not a control class the registry recognizes"
+        )
+    # declared_role is not a degree of freedom: a registration that does not
+    # carry the declaration is precisely the lie the ledger cannot afford.
+    params = {**params, "declared_role": CONTROL_DECLARATION}
+    version = register_version(
+        session, key, name, cls, timeframe=timeframe, universe=universe, params=params, budget=budget
+    )
+    if _current_state(session, version.id) != "research":
+        raise TransitionRefused(
+            f"version {version.id} is not in research after registration — refusing to guess"
+        )
+
+    # the designation row: verdict 'control', honest emptiness everywhere a
+    # backtest would have written numbers. params_json MUST equal the
+    # version's exactly — transition() enforces it on this edge too.
+    designation = BacktestValidation(
+        bot=key,
+        symbol="",
+        timeframe=timeframe,
+        strategy=name,
+        params_json=json.dumps(params, sort_keys=True),
+        seed=int(params.get("seed", 0)),
+        data_source="none",
+        data_rows=0,
+        data_start="",
+        data_end="",
+        trades_n=0,
+        min_trades_required=0,
+        permutation_p=None,
+        sharpe_actual=None,
+        sharpe_ci_lo=None,
+        sharpe_ci_hi=None,
+        prob_positive=None,
+        wf_positive_folds=0,
+        wf_total_folds=0,
+        verdict="control",
+        reasons_json=json.dumps([CONTROL_DECLARATION]),
+        validation_json=json.dumps({"designation": CONTROL_DECLARATION, "no_backtest_exists": True}),
+        run_id=None,
+        engine_version=None,
+    )
+    session.add(designation)
+    session.flush()
+
+    states = [
+        transition(
+            session,
+            version.id,
+            "validated",
+            validation_id=designation.id,
+            note=CONTROL_DECLARATION,
+        ),
+        transition(
+            session,
+            version.id,
+            "paper",
+            note="paper is free — " + CONTROL_DECLARATION,
+        ),
+    ]
+    return {
+        "version_id": version.id,
+        "validation_id": designation.id,
+        "states": [(s.state, s.note) for s in states],
+    }
 
 
 def roster(session) -> list[dict]:

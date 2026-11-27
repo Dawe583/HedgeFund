@@ -653,3 +653,71 @@ class AuditChainVerification(BaseModel):
     rows: int
     violations: list[str]
     intact: bool
+
+
+class MLPrediction(BaseModel):
+    """One forward-return prediction from the ML track record (F-7): the
+    artifact's own numbers with their provenance. `noise` is non-nullable
+    by design — a prediction without its noise scale is a lie by omission.
+    `noise_basis` says which scale it is (oof_rmse for the frozen artifact,
+    pred_series_std for the rolling series, which carries nothing else).
+    The outcome half is explicit null until the horizon-close scorer fills
+    it; correct_direction stays null forever on a realized return of
+    exactly zero, because a tie is not a coin flip."""
+
+    id: int
+    ts: dt.datetime | None
+    symbol: str
+    timeframe: str
+    artifact_kind: str
+    horizon_bars: int
+    predicted_return: float
+    noise: float
+    noise_basis: str
+    z_score: float
+    oof_corr: float | None
+    bar_close_time: dt.datetime | None
+    trained_through: str
+    outcome_return: float | None
+    scored_at: dt.datetime | None
+    correct_direction: bool | None
+    caveat: str
+
+
+class MLPredictionsLatest(BaseModel):
+    """GET /api/trading/predictions/latest — the newest committed prediction
+    per (symbol, artifact_kind). Empty is first-class: no scanner run means
+    no instrument reading, never a fabricated zero."""
+
+    predictions: list[MLPrediction]
+
+
+class MLPredictionSeriesRecord(BaseModel):
+    """One series' scored aggregate. Every statistic carries its sample:
+    `hit_rate` is over DECIDED outcomes only (ties excluded), and
+    `small_sample` true means the count is below the honesty bar — the
+    rate is then decoration and the UI labels it exactly that."""
+
+    symbol: str
+    artifact_kind: str
+    timeframe: str
+    total: int
+    pending: int
+    scored: int
+    decided: int
+    ties: int
+    hits: int
+    hit_rate: float | None
+    mean_predicted: float | None
+    mean_realized: float | None
+    small_sample: bool
+    sample_note: str
+
+
+class MLPredictionTrackRecord(BaseModel):
+    """GET /api/trading/predictions/track-record — per-series aggregates
+    plus the small-sample threshold the labelling stands on."""
+
+    series: list[MLPredictionSeriesRecord]
+    small_sample_threshold: int
+    caveat: str

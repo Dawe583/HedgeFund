@@ -24,6 +24,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.schemas_trading import (
     ApproveRequest,
+    MLPredictionsLatest,
+    MLPredictionTrackRecord,
     AuditChainVerification,
     AuditSignoffCreateRequest,
     MandateCreateRequest,
@@ -1650,3 +1652,45 @@ def verify_audit_chain(db: Session = Depends(get_trading_db)) -> dict:
         return {"rows": rows, "violations": violations, "intact": not violations}
     except (OperationalError, SQLAlchemyError):
         return {"rows": 0, "violations": [], "intact": True}
+
+
+def _predictions_table_present(db: Session) -> bool:
+    """The predictions table is younger than every database it serves. A
+    database without it is not an error — it is a scanner that has never
+    run there, and the honest answer is empty."""
+    try:
+        return "predictions" in inspect(db.get_bind()).get_table_names()
+    except SQLAlchemyError:
+        return False
+
+
+@router.get("/predictions/latest", response_model=MLPredictionsLatest)
+def predictions_latest(db: Session = Depends(get_trading_db)) -> dict:
+    """The ML track record's current state: one prediction per (symbol,
+    artifact_kind), each carrying its noise scale, noise basis, training
+    boundary and caveat — never a bare number. Empty when no scanner has
+    ever run: absence is the answer, not an error."""
+    if not _predictions_table_present(db):
+        return {"predictions": []}
+    try:
+        from trading.predictions import latest_predictions
+
+        return {"predictions": latest_predictions(db)}
+    except (OperationalError, SQLAlchemyError):
+        return {"predictions": []}
+
+
+@router.get("/predictions/track-record", response_model=MLPredictionTrackRecord)
+def predictions_track_record(db: Session = Depends(get_trading_db)) -> dict:
+    """The scored history aggregated honestly: hit rate over decided
+    outcomes only, mean predicted vs mean realized, the pending/scored
+    split, and the sample size on every aggregate — a hit rate over four
+    outcomes is decoration and is labelled exactly that."""
+    from trading.predictions import CAVEAT, SMALL_SAMPLE_N, track_record
+
+    if not _predictions_table_present(db):
+        return {"series": [], "small_sample_threshold": SMALL_SAMPLE_N, "caveat": CAVEAT}
+    try:
+        return track_record(db)
+    except (OperationalError, SQLAlchemyError):
+        return {"series": [], "small_sample_threshold": SMALL_SAMPLE_N, "caveat": CAVEAT}

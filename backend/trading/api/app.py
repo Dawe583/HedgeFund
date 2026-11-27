@@ -294,6 +294,42 @@ async def predictions(symbol: str = "BTCUSDT", limit: int = 120):
     """Per-bot market forecasts — chart markers + 'how agents think' panel."""
     return await asyncio.to_thread(_predictions_snapshot, symbol, limit)
 
+@app.get("/api/predictions/latest")
+async def predictions_latest():
+    """The ML track record's current state: one prediction per (symbol,
+    artifact_kind), each carrying its noise scale, training boundary and
+    caveat — never a bare number. Empty when no scanner has ever run."""
+    return await asyncio.to_thread(_predictions_latest_snapshot)
+
+
+def _predictions_latest_snapshot() -> dict:
+    from trading.predictions import latest_predictions
+
+    session = session_factory()
+    try:
+        return {"predictions": latest_predictions(session)}
+    finally:
+        session.close()
+
+
+@app.get("/api/predictions/track-record")
+async def predictions_track_record():
+    """The scored history aggregated honestly: hit rate over decided
+    outcomes only, mean predicted vs mean realized, the pending/scored
+    split, and the sample size everywhere — small samples are labelled,
+    because a hit rate over four outcomes is decoration."""
+    return await asyncio.to_thread(_track_record_snapshot)
+
+
+def _track_record_snapshot() -> dict:
+    from trading.predictions import track_record
+
+    session = session_factory()
+    try:
+        return track_record(session)
+    finally:
+        session.close()
+
 
 def _predictions_snapshot(symbol: str, limit: int) -> list[dict]:
     session = session_factory()

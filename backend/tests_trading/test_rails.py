@@ -86,16 +86,16 @@ def test_cooldown_follows_risk_guard_semantics_exactly():
     breakeven counts as a loss — risk_guard.py's arithmetic, in-run state."""
     rb = RailBook(1000.0, killswitch_dd_pct=0.12, daily_loss_pct=0.05)
     t0 = 1_700_000_000.0
-    assert rb.entry_verdict(t0, 1000.0) is None
+    assert rb.entry_verdict(t0) is None
     rb.settle(-1.0, t0, 999.0)
     rb.settle(0.0, t0, 999.0)  # breakeven is a loss
     events = rb.settle(-1.0, t0, 998.0)
     assert len(events) == 1 and events[0]["decision"] == "cooldown_started"
     assert rb.cooldown_until == t0 + 4 * 3600
     assert rb.loss_streak == 0  # the streak zeroes when the cooldown arms
-    v = rb.entry_verdict(t0 + 60, 998.0)
+    v = rb.entry_verdict(t0 + 60)
     assert v is not None and v["rail"] == "loss_streak_cooldown"
-    assert rb.entry_verdict(t0 + 4 * 3600 + 1, 998.0) is None
+    assert rb.entry_verdict(t0 + 4 * 3600 + 1) is None
 
 
 def test_win_resets_the_streak():
@@ -121,11 +121,11 @@ def test_kill_switch_trips_at_drawdown_from_peak_and_latches():
     trips = [e for e in events if e["rail"] == "kill_switch_drawdown"]
     assert len(trips) == 1 and trips[0]["decision"] == "tripped"
     assert trips[0]["inputs"]["peak_equity"] == pytest.approx(1200.0)
-    v = rb.entry_verdict(t0 + 10, 1055.0)
+    v = rb.entry_verdict(t0 + 10)
     assert v["rail"] == "kill_switch_drawdown"
     # the latch is one-way: recovery does not reopen entries
     rb.settle(+500.0, t0, 1555.0)
-    assert rb.entry_verdict(t0 + 20, 1555.0)["rail"] == "kill_switch_drawdown"
+    assert rb.entry_verdict(t0 + 20)["rail"] == "kill_switch_drawdown"
 
 
 def test_daily_loss_latches_for_the_utc_day_and_rolls():
@@ -133,13 +133,13 @@ def test_daily_loss_latches_for_the_utc_day_and_rolls():
     day1 = 1_700_006_400.0  # 2023-11-14T13:20:00Z
     rb.settle(-60.0, day1, 940.0)  # 6% loss in the day
     assert rb.daily_breached is True
-    assert rb.entry_verdict(day1 + 60, 940.0)["rail"] == "daily_loss_limit"
+    assert rb.entry_verdict(day1 + 60)["rail"] == "daily_loss_limit"
     # later wins do not un-forfeit the day
     rb.settle(+100.0, day1 + 120, 1040.0)
-    assert rb.entry_verdict(day1 + 130, 1040.0)["rail"] == "daily_loss_limit"
+    assert rb.entry_verdict(day1 + 130)["rail"] == "daily_loss_limit"
     # the next UTC day rolls the window — entries flow again
     day2 = day1 + 86400
-    assert rb.entry_verdict(day2, 1040.0) is None
+    assert rb.entry_verdict(day2) is None
     assert rb.daily_breached is False
     assert rb.day_start_equity == 1040.0
 
@@ -148,7 +148,7 @@ def test_snapshot_reports_consumed_fractions():
     rb = RailBook(1000.0, killswitch_dd_pct=0.12, daily_loss_pct=0.05)
     t0 = 1_700_000_000.0
     rb.settle(-25.0, t0, 975.0)
-    snap = rb.snapshot(t0, 975.0)
+    snap = rb.snapshot(t0)
     assert snap["daily_loss"] == pytest.approx(25.0)
     assert snap["daily_loss_limit"] == pytest.approx(50.0)
     assert snap["daily_loss_consumed"] == pytest.approx(0.5)

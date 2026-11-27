@@ -56,8 +56,10 @@ class BTConfig:
     # configuration, evaluated in the harness BEFORE sizing. The 12% drawdown
     # kill-switch and the 5% daily loss limit default from settings; the
     # loss-streak cooldown constants live in risk_guard.py, one definition
-    # for both storage backends. flatten_on_kill is honestly vacuous in the
-    # harness's realized-only accounting — see rails.py's module docstring.
+    # for both storage backends. flatten_on_kill is real since F-4's repair
+    # (2026-11-27): rails measure marked equity, and a kill trip with a
+    # position open force-closes it at the tripping bar's close — see
+    # rails.py's module docstring.
     killswitch_dd_pct: float = field(default_factory=lambda: get_settings().risk_killswitch_dd_pct)
     daily_loss_pct: float = field(default_factory=lambda: get_settings().risk_max_daily_loss_pct)
     loss_streak_max: int = 3

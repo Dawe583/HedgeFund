@@ -434,6 +434,37 @@ def _make_strategy_class():
                     self._state.realized_net -= cost
                     pos_f["funding_accrued"] = pos_f.get("funding_accrued", 0.0) + cost
 
+
+            # mark-to-market rails (F-4, 2026-11-27): the open position is
+            # valued at THIS bar's close and the rails evaluate the marked
+            # equity before any exit/entry decision below. Unrealized uses
+            # the raw entry-fill price (fees are settle-time reconstruction
+            # — an approximation of bps against the truth that an underwater
+            # position must move the rails, and the same quantity paper
+            # measures). A trip event with flattened: true means the harness
+            # owes the market a flatten: the position is force-closed at this
+            # same bar close, timeout fill semantics. The guard runs whenever
+            # the kill is tripped — not only on the tripping bar — because a
+            # close that failed to fill owes the next bar the same flatten.
+            unrealized = 0.0
+            pos_open = self._open_pos is not None and not self._open_pos.get("pending") and self._open_pos.get("entry_fill") is not None
+            if pos_open:
+                entry_raw = self._open_pos["entry_fill"]["price"]
+                direction = 1 if self._open_pos["side"] == "long" else -1
+                unrealized = (self._last_close - entry_raw) * self._open_pos["qty"] * direction
+            for event in self._rails.mark(self._last_bar_close_s, self._state.realized_net, unrealized, pos_open):
+                self._emit_rail_event(event["rail"], event["decision"], event["inputs"], event["ts"])
+                self.log.warning(f"rail {event['decision']}: {event['rail']} {event['inputs']}")
+            if (
+                self._rails.flatten_on_kill
+                and self._rails.kill_tripped
+                and self._open_pos is not None
+                and not self._open_pos.get("pending")
+                and self._open_pos.get("exit_order_id") is None
+            ):
+                self.log.error("kill-switch flatten — force-closing at bar close")
+                self._close_market("kill_flatten")
+
             sig_bar = k - 1
             sig = self._strategy.signal(sig_bar, df.iloc[: sig_bar + 1])
 
@@ -594,7 +625,7 @@ def _make_strategy_class():
             first."""
             iid = str(self.instrument_id)
             base = {"instrument": iid, "side": side_str, "signal_bar": sig_bar,
-                    "equity": self._state.realized_net}
+                    "equity": self._rails.last_marked}
             if self._halt_sentinel_present():
                 return {**base, "rail": "halt_sentinel", "reason": "halt_sentinel",
                         "inputs": {"path": self._state.halt_sentinel_path}}
@@ -614,7 +645,7 @@ def _make_strategy_class():
                         inputs["check_error"] = error
                     return {**base, "rail": "manual_killswitch", "reason": "manual_killswitch",
                             "inputs": inputs}
-            verdict = self._rails.entry_verdict(self._last_bar_close_s, self._state.realized_net)
+            verdict = self._rails.entry_verdict(self._last_bar_close_s)
             if verdict is not None:
                 return {**base, **verdict}
             return None
@@ -858,7 +889,7 @@ def _make_strategy_class():
                 self._place_protective(pos)
                 if self._state.on_position_event is not None:
                     self._state.on_position_event("entry", pos)
-            elif meta["role"] in ("stop", "take_profit", "signal_exit", "timeout", "restart_unrecoverable"):
+            elif meta["role"] in ("stop", "take_profit", "signal_exit", "timeout", "restart_unrecoverable", "kill_flatten"):
                 if pos.get("entry_fill") is not None and not pos.get("closed"):
                     pos["exit_fill"] = fill
                     pos["closed"] = True
@@ -1064,6 +1095,14 @@ def run_kernel_backtest(
     harness wrapping happens here, once, so the truncation logic exists in
     exactly one place.
 
+    F-4 provenance (2026-11-27): the rails inside the run measure MARKED
+    equity (bar-close mark-to-market), so the veto tape and rail events can
+    diverge from what realized-only rails would have done. What does NOT
+    change is the REPORTED equity series: result.equity is the realized
+    curve it always was — mark-to-market changes which entries the rails
+    veto, never what the equity series means. Phase-A sweeps run the rails
+    off (99.9% drawdown), so screening evidence is untouched.
+
     exposure_book: optional pre-existing ExposureBook — the multi-strategy
     seam. The desk shares one book across strategies; a test can seed one
     to exercise the gross cap as a desk-wide rail.
@@ -1128,7 +1167,7 @@ def run_kernel_backtest(
     # non-veto rail firings (trip, breach, cooldown start) — the veto tape
     # explains refused entries, this tape explains how the rails got there
     metrics["rail_events"] = [dict(e) for e in state.rail_events]
-    metrics["rail_state"] = state.rails.snapshot(strat._last_bar_close_s, state.realized_net) if state.rails is not None else None
+    metrics["rail_state"] = state.rails.snapshot(strat._last_bar_close_s) if state.rails is not None else None
     engine.dispose()
     return BTResult(trades, equity, metrics)
 

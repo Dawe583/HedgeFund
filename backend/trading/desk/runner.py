@@ -275,7 +275,7 @@ def write_rail_snapshots(desk) -> None:
             bot_notional = sum(
                 book.instrument_notional(iid) for iid in list(book._by_instrument) if iid.startswith(prefix)
             )
-            snap = rails.snapshot(now_s, state.realized_net)
+            snap = rails.snapshot(now_s)
             snap["exposure"] = {
                 "instrument_notional": round(bot_notional, 6),
                 "gross_notional": round(book.gross_notional(), 6),

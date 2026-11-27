@@ -511,6 +511,10 @@ def validate_core(
         raise SystemExit(f"empty frame passed for {symbol} {timeframe} — a window with no bars validates nothing")
     tf_ms = TF_MS_FRESHNESS.get(timeframe)
     if tf_ms and isinstance(series_last, pd.Timestamp):
+        # the candle store's UTC contract means a naive stamp IS utc — tz_localize,
+        # never assume local time (sqlite round-trips drop tzinfo silently)
+        if series_last.tzinfo is None:
+            series_last = series_last.tz_localize("UTC")
         age_s = (pd.Timestamp.now(tz="UTC") - series_last).total_seconds()
         if age_s > 2 * tf_ms / 1000:
             freshness["stale"] = True

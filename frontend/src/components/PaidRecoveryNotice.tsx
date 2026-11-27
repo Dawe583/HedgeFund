@@ -15,7 +15,9 @@ import {
   unreadLine,
   type Formats,
 } from "./paidRecovery";
-import { apiError, btnClass, locale, money } from "./ui";
+import { btnClass } from "./ui";
+import { apiError } from "./apiError";
+import { locale, money } from "./money";
 
 /* What the ledger paid before an account's latest situation, proposed row by
    row above the table whose shares it changes (brief AW; the reader chose the

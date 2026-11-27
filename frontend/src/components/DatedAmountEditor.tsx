@@ -1,4 +1,6 @@
-import { EditorButtons, Row, RowsOrEmpty, apiError, inputClass, money, CURRENCY_LIST } from "./ui";
+import { EditorButtons, Row, RowsOrEmpty, inputClass, CURRENCY_LIST } from "./ui";
+import { apiError } from "./apiError";
+import { money } from "./money";
 import { useListEditor } from "./listEditor";
 import { marks, type Need } from "./required";
 import { askBeforeDeleting } from "./cashDelete";

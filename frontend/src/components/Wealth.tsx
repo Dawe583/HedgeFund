@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useImperativeHandle,
@@ -47,24 +48,11 @@ import {
   type CashAnchor,
   type CashPosition,
 } from "../api/cash";
-import {
-  Breadcrumb,
-  Explainer,
-  Row,
-  RowsOrEmpty,
-  Section,
-  apiError,
-  btnClass,
-  cardClass,
-  inputClass,
-  locale,
-  todayISO,
-  type Crumb,
-  type Explain,
-  CURRENCY_LIST,
-} from "./ui";
-import { CancelButton, money, policyWord } from "./ui";
-import { sameUnit } from "./money";
+import { Breadcrumb, Explainer, Row, RowsOrEmpty, Section, btnClass, cardClass, inputClass, CancelButton, type Crumb, type Explain, CURRENCY_LIST } from "./ui";
+import { apiError } from "./apiError";
+import { locale, money, sameUnit } from "./money";
+import { todayISO } from "./calendarDays";
+import { policyWord } from "./dividendLine";
 import { accountCurrencyOn, listingCurrencyOf } from "./proposedCurrency";
 import { CASH_ANCHOR, INSTITUTION, holding, marks, refusal } from "./required";
 import { absentTickerCost } from "./absentTicker";
@@ -195,11 +183,7 @@ function InstitutionsLevel({ onSelect }: { onSelect: (i: Institution) => void })
   const [type, setType] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -209,7 +193,11 @@ function InstitutionsLevel({ onSelect }: { onSelect: (i: Institution) => void })
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   function reset() {
     setEditId(null);
@@ -363,11 +351,7 @@ function CashRegister({
   const [error, setError] = useState<string | null>(null);
 
 
-  useEffect(() => {
-    void load();
-  }, [institution.id]);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -382,7 +366,11 @@ function CashRegister({
     } finally {
       setLoading(false);
     }
-  }
+  }, [institution.id]);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   return (
     <Section
@@ -561,11 +549,7 @@ function SnapshotsLevel({
     ? "border-l-2 border-down bg-down-tint px-3 py-2 text-xs text-down"
     : "border-l-2 border-rule bg-surface px-3 py-2 text-xs text-ink-soft";
 
-  useEffect(() => {
-    void load();
-  }, [institution.id]);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -601,7 +585,11 @@ function SnapshotsLevel({
     } finally {
       setLoading(false);
     }
-  }
+  }, [institution.id]);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   // Enter in the date field must do the SAFE thing. An empty situation becomes
   // the authority for the whole institution the moment it is saved, so hitting
@@ -875,11 +863,7 @@ function SituationDetail({ snapshot }: { snapshot: Snapshot }) {
   // The one form, which a row's ✎ fills.
   const form = useRef<PositionFormHandle>(null);
 
-  useEffect(() => {
-    void load();
-  }, [snapshot.id]);
-
-  async function load() {
+  const load = useCallback(async () => {
     setError(null);
     try {
       const [h, a, l] = await Promise.all([
@@ -895,7 +879,11 @@ function SituationDetail({ snapshot }: { snapshot: Snapshot }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [snapshot.id, snapshot.institution_id]);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   // `value_base`, never `value`: the second is what the reader typed, in
   // whatever currency they typed it in, and adding two of those together is

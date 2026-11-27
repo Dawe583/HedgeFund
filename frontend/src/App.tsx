@@ -22,7 +22,8 @@ import { KeySheet } from "./components/KeySheet";
 import { StatusLine } from "./components/StatusLine";
 import { SECTION_KEYS, readHotkey } from "./components/hotkeys";
 import { correctionAsked, dividendsNote, recordedFor } from "./components/catchUpNote";
-import DividendQuestions, { BANNER_FORMATS } from "./components/DividendQuestions";
+import DividendQuestions from "./components/DividendQuestions";
+import { BANNER_FORMATS } from "./components/bannerFormats";
 import { recognisedLine, waitingLine } from "./components/dividendQuestion";
 
 import type { Focus } from "./nav";

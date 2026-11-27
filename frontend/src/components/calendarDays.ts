@@ -47,3 +47,11 @@ export function ageWords(date: string, now: Date = new Date()): string {
   const n = daysAgo(date, now);
   return n <= 0 ? "today" : `${dayCount(n)} ago`;
 }
+
+// Today's date in LOCAL time as YYYY-MM-DD. Never use toISOString() for this:
+// it returns the UTC date, which near midnight differs from the user's (and
+// the backend's) local date and silently breaks date comparisons. The one
+// definition is `calendarDays.localDay`, which the situation's age counts from.
+export function todayISO(): string {
+  return localDay(new Date());
+}

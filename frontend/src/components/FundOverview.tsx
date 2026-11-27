@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { OverviewFund } from "../api/overview";
 import { getFundOverview, putTradingAccount } from "../api/overview";
 import { getInstitutions } from "../api/institutions";
-import { money } from "./ui";
+import { money } from "./money";
 import { NO_DESK_EQUITY, engineStamp, gapDirection, reconciliationReading } from "./reconciliation";
 
 /* The consolidated fund overview (design §8, rule D13): the trading desk's

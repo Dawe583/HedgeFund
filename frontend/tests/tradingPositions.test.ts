@@ -23,7 +23,8 @@ for (const key of ["window", "document", "navigator", "HTMLElement", "CustomEven
 const React = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { act } = React;
-const { PositionsSectionForTest, fmtAge } = await import("../src/components/Trading.tsx");
+const { PositionsSectionForTest } = await import("../src/components/Trading.tsx");
+const { fmtAge } = await import("../src/components/tradingAge.ts");
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 

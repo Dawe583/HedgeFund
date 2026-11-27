@@ -12,7 +12,8 @@ import {
   type IntelligenceMemory,
   type MemoryEntry,
 } from "../api/intelligence";
-import { apiError, cardClass, Section, statLabelClass } from "./ui";
+import { cardClass, Section, statLabelClass } from "./ui";
+import { apiError } from "./apiError";
 import { EmptyState } from "./Emblem";
 import {
   alertsBySeverity,

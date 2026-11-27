@@ -9,7 +9,9 @@ import {
 } from "../api/instruments";
 import { catalogueNotice, type CatalogueState } from "./catalogueNotice";
 import { pickerListWidth } from "./pickerWidth";
-import { inputClass, locale, policyWord } from "./ui";
+import { inputClass } from "./ui";
+import { locale } from "./money";
+import { policyWord } from "./dividendLine";
 
 /* The instrument name field, with the catalogue behind it.
 
@@ -149,11 +151,17 @@ export function InstrumentPicker({
 
   // Debounced, but only as a courtesy to typing: the search is local and
   // answers in a couple of milliseconds, so there is no network to spare.
+  // A query too short to search clears what the last one found — the clear
+  // happens in render, when the query crosses back under two letters.
+  const tooShort = value.trim().length < 2;
+  const [wasTooShort, setWasTooShort] = useState(tooShort);
+  if (wasTooShort !== tooShort) {
+    setWasTooShort(tooShort);
+    if (tooShort) setResult(null);
+  }
+
   useEffect(() => {
-    if (value.trim().length < 2) {
-      setResult(null);
-      return;
-    }
+    if (tooShort) return;
     const t = setTimeout(() => {
       // The two lanes are fetched INDEPENDENTLY and rendered as they arrive.
       // The catalogue answers from SQLite in milliseconds; the live lookup is
@@ -173,7 +181,7 @@ export function InstrumentPicker({
         .finally(() => setLiveBusy(false));
     }, 250);
     return () => clearTimeout(t);
-  }, [value, arrived]);
+  }, [value, arrived, tooShort]);
 
   useEffect(() => {
     function away(e: MouseEvent) {

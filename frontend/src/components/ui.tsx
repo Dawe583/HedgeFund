@@ -1,8 +1,5 @@
-import axios from "axios";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import type { Components } from "react-markdown";
 import { EDGE, nextOpen, placePanel } from "./explain";
-import { localDay } from "./calendarDays";
 
 // Shared UI building blocks + style constants, reused across feature tabs.
 
@@ -37,10 +34,6 @@ export const cardClass = "border border-rule bg-surface";
    from a box with no suggestions and nothing saying so. */
 export const CURRENCY_LIST = "currency-codes";
 
-// The reader's locale and the per-currency formatter live in ./money, which
-// has no React in it; re-exported here so the import every page already has
-// keeps working.
-export { locale, money } from "./money";
 
 /* CONVERTED figures — every total the backend has already turned into the
    base currency — are printed in the base THE PAYLOAD DECLARES:
@@ -68,91 +61,14 @@ export { locale, money } from "./money";
    the backend with its own data. The box shows the proposal, and what the
    reader types in it wins. */
 
-// Today's date in LOCAL time as YYYY-MM-DD. Never use toISOString() for this:
-// it returns the UTC date, which near midnight differs from the user's (and
-// the backend's) local date and silently breaks date comparisons. The one
-// definition is `calendarDays.localDay`, which the situation's age counts from.
-export function todayISO(): string {
-  return localDay(new Date());
-}
 
-// A fund's dividend policy in the words a reader sees: kept in `dividendLine`,
-// beside what a line says when no policy is stated, so the two cannot drift.
-export { policyWord } from "./dividendLine";
 
-// What the backend actually said about a failed request, or `fallback` when it
-// said nothing usable.
-//
-// The backend writes its refusals to be read by a person — "Broker B already
-// has a situation on 2026-02-01" — and every call site used to throw them away
-// in a bare `catch { setError("Save failed.") }`. The reader got a sentence
-// naming the verb and nothing else, and so did whoever was debugging. The
-// fallback is what we say when there is genuinely nothing better, not the
-// first thing we reach for.
-export function apiError(e: unknown, fallback: string): string {
-  if (!axios.isAxiosError(e)) return fallback;
 
-  // Nothing answered at all. "The server refused this" and "there was no
-  // server" are different claims, and reporting the second as the first sends
-  // someone off to correct a request that was fine — the same distinction the
-  // backend keeps between MarketUnreachable and PriceError.
-  if (!e.response) return "The backend did not answer. Is it running on :8000?";
 
-  const detail = (e.response.data as { detail?: unknown } | undefined)?.detail;
-  if (typeof detail === "string" && detail.trim()) return detail.trim();
-
-  // 422: FastAPI validates the body and returns one entry per offending field.
-  // String()-ing that array reads "[object Object]", which is a worse message
-  // than the fallback it replaced — so it is unpacked rather than stringified.
-  if (Array.isArray(detail)) {
-    const fields = detail
-      .map((d) => {
-        const { loc, msg } = d as { loc?: unknown[]; msg?: unknown };
-        if (typeof msg !== "string") return null;
-        const field = Array.isArray(loc) && loc.length ? String(loc[loc.length - 1]) : null;
-        return field ? `${field}: ${msg}` : msg;
-      })
-      .filter((line): line is string => line !== null);
-    if (fields.length) return fields.join("; ");
-  }
-
-  // A 500 comes back as plain "Internal Server Error" with no detail, which
-  // names the failure no better than the caller's own fallback does.
-  return fallback;
-}
 
 /* Motion that claims only that something is happening — which, unlike a
    progress bar, is a claim we can always stand behind. Stops for readers who
    asked their OS for less motion. */
-// How a model's Markdown is drawn — Tailwind classes per element, no typography
-// plugin. It lived in Advisor.tsx, which was a page; it is here now because it
-// was never that page's, and the two things that render prose in this app are
-// the chat panel and the analysis reader.
-export const mdComponents: Components = {
-  h1: ({ node: _n, ...p }) => <h1 className="mb-3 mt-2 text-xl font-semibold text-ink" {...p} />,
-  h2: ({ node: _n, ...p }) => <h2 className="mb-2 mt-6 border-b border-hair pb-1 text-lg font-semibold text-ink" {...p} />,
-  h3: ({ node: _n, ...p }) => <h3 className="mb-1.5 mt-4 text-base font-semibold text-ink" {...p} />,
-  p: ({ node: _n, ...p }) => <p className="my-2" {...p} />,
-  ul: ({ node: _n, ...p }) => <ul className="my-2 list-disc space-y-1 pl-5" {...p} />,
-  ol: ({ node: _n, ...p }) => <ol className="my-2 list-decimal space-y-1 pl-5" {...p} />,
-  strong: ({ node: _n, ...p }) => <strong className="font-semibold text-ink" {...p} />,
-  a: ({ node: _n, ...p }) => <a className="text-olive underline" target="_blank" rel="noreferrer" {...p} />,
-  blockquote: ({ node: _n, ...p }) => (
-    <blockquote className="my-3 rounded-r-lg border-l-4 border-warn bg-warn-tint px-3 py-2 text-ink" {...p} />
-  ),
-  code: ({ node: _n, ...p }) => <code className="rounded bg-tint px-1 py-0.5 font-mono text-[13px]" {...p} />,
-  pre: ({ node: _n, ...p }) => (
-    <pre className="my-3 overflow-x-auto rounded-sm border border-hair bg-tint p-3 font-mono text-xs text-ink [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-ink" {...p} />
-  ),
-  hr: ({ node: _n, ...p }) => <hr className="my-4 border-rule" {...p} />,
-  table: ({ node: _n, ...p }) => (
-    <div className="my-3 overflow-x-auto">
-      <table className="w-full border-collapse text-left text-xs" {...p} />
-    </div>
-  ),
-  th: ({ node: _n, ...p }) => <th className="border-b border-rule py-1.5 pr-4 font-semibold text-ink" {...p} />,
-  td: ({ node: _n, ...p }) => <td className="border-b border-hair py-1.5 pr-4 align-top" {...p} />,
-};
 
 export function Spinner({ className }: { className?: string }) {
   return (
@@ -166,24 +82,6 @@ export function Spinner({ className }: { className?: string }) {
       <path d="M14 8a6 6 0 0 0-6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
-}
-
-/* Whole seconds since `startedAt`, ticking once a second while it is set.
-   Elapsed time is a FACT about the wait, which is what lets it stand where a
-   forecast ("up to a minute") could not: at 20 seconds this is normal, at 90 it
-   is not, and the reader can tell the two apart without being promised
-   anything. `null` means nothing is running and the clock does not tick. */
-export function useElapsedSeconds(startedAt: number | null): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (startedAt === null) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [startedAt]);
-  if (startedAt === null) return 0;
-  // `now` can predate the click for the first second — the interval has not
-  // fired yet — so the clock starts at 0, never below it.
-  return Math.max(0, Math.round((now - startedAt) / 1000));
 }
 
 export type Crumb = { label: string; active: boolean; onClick: () => void };
@@ -579,13 +477,7 @@ export function Row({
     it too, so one number is not called two things on two screens. */
 export const statLabelClass = "text-[0.65rem] font-medium uppercase tracking-[0.14em] text-ink-soft";
 
-/** One number, one name, one definition: the Cash flow page and the
-    Dashboard's meter show the same `savings_rate`, and used to call it two
-    different things. */
-export const SAVINGS_RATE: Explain = {
-  question: "What is the savings rate?",
-  text: "Share of monthly income left after expenses.",
-};
+
 
 export function StatCard({
   label,

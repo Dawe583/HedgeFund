@@ -18,5 +18,18 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // The repo's idiom for an intentionally unused binding is the `_`
+      // prefix (`node: _n` drops react-markdown's AST node from the props
+      // spread). The rule honors the idiom rather than forcing a rename.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          ignoreRestSiblings: true,
+        },
+      ],
+    },
   },
 ])

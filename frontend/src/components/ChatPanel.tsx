@@ -26,7 +26,10 @@ import {
   type ChatModels,
   type ChatStepEvent,
 } from "../api/chat";
-import { Explainer, Spinner, apiError, locale, mdComponents, type Explain } from "./ui";
+import { Explainer, Spinner, type Explain } from "./ui";
+import { apiError } from "./apiError";
+import { mdComponents } from "./mdComponents";
+import { locale } from "./money";
 import {
   FOLLOWING,
   onContent,

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { refusal, type Need } from "./required";
-import { apiError } from "./ui";
+import { apiError } from "./apiError";
 
 /* The controller behind "a list of things, with a form above it that both adds
    and edits" — the shape this app is built out of, written thirteen times.

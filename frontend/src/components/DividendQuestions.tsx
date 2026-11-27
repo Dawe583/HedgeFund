@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { answerDividend, type CatchUpResult, type DividendQuestion } from "../api/transactions";
-import { choices, questionText, type Answer, type Formats } from "./dividendQuestion";
-import { apiError, locale, money } from "./ui";
+import { choices, questionText, type Answer } from "./dividendQuestion";
+import { BANNER_FORMATS } from "./bannerFormats";
+import { apiError } from "./apiError";
 
 /* The questions the catch-up asks about dividends (brief AZ), in the start-up
    banner, each with the answers it offers. Nothing is written until one is
@@ -11,17 +12,6 @@ import { apiError, locale, money } from "./ui";
    refused with a sentence, said under it. The words are
    `dividendQuestion.ts`'s. */
 
-// A day in a sentence: the long form, which no reader takes for another day.
-const longDate = (iso: string) =>
-  new Date(iso + "T00:00:00").toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" });
-
-const perShare = new Intl.NumberFormat(locale, { maximumFractionDigits: 6 });
-
-export const BANNER_FORMATS: Formats = {
-  date: longDate,
-  money: (amount, currency) => money(currency, "cents").format(amount),
-  perShare: (amount, currency) => `${perShare.format(amount)} ${currency}`,
-};
 
 function keyOf(q: DividendQuestion): string {
   return [q.kind, q.institution_id, q.symbol, ...q.dividends.map((d) => d.ex_date), ...q.entries.map((e) => e.id)].join(":");

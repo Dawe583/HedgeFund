@@ -47,7 +47,9 @@ import { EquityChart } from "../viz/EquityChart";
 import { fromApiCurve } from "../viz/equityData";
 import { EmptyState } from "./Emblem";
 import LedgerBrowser from "./LedgerBrowser";
-import { apiError, btnClass, cardClass, inputClass, Section, statLabelClass } from "./ui";
+import { btnClass, cardClass, inputClass, Section, statLabelClass } from "./ui";
+import { apiError } from "./apiError";
+import { fmtAge } from "./tradingAge";
 import {
   divergenceBudgetsOf,
   engineReading,
@@ -534,31 +536,16 @@ function StrategiesSection({
    Age formatting: mm:ss under the hour, hh:mm under the day, then days —
    a position's age is scanned, never read. */
 
-/** Seconds as the blotter's age readout. Exported (and pure) because the
-    tick's arithmetic is exactly what a render test can pin. */
-export function fmtAge(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  if (s >= 86400) {
-    const d = Math.floor(s / 86400);
-    const h = Math.floor((s % 86400) / 3600);
-    return `${d}d ${h}h`;
-  }
-  if (s >= 3600) {
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    return `${h}:${String(m).padStart(2, "0")}h`;
-  }
-  const m = Math.floor(s / 60);
-  return `${m}:${String(s % 60).padStart(2, "0")}`;
-}
 
-function useTick(intervalMs: number): number {
-  const [tick, setTick] = useState(0);
+/** The clock, ticking: ms epoch, re-read once per interval. The reading is
+    state — never taken during render — because render must be pure. */
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), intervalMs);
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
     return () => clearInterval(id);
   }, [intervalMs]);
-  return tick;
+  return now;
 }
 
 function fmtClock(iso: string): string {
@@ -584,9 +571,7 @@ export function PositionsBlotter({
   fetchedAt: number;
   budgets?: DivergenceBudgets;
 }) {
-  const tick = useTick(1000);
-  void tick; // the tick's only job is to re-render; the clock is Date.now()
-  const elapsed = (Date.now() - fetchedAt) / 1000;
+  const elapsed = (useNow(1000) - fetchedAt) / 1000;
   return (
     <div className={cardClass + " overflow-x-auto"}>
       <table className="w-full border-collapse text-xs">

@@ -6,7 +6,8 @@ import {
   type LedgerVerdictRow,
 } from "../api/tradingLedger";
 import { EmptyState } from "./Emblem";
-import { apiError, cardClass } from "./ui";
+import { cardClass } from "./ui";
+import { apiError } from "./apiError";
 import { fmtCi, fmtP } from "./tradingStatus";
 
 /* LEDGER BROWSER — the research ledger in-app: every measured cell with its

@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -39,7 +40,10 @@ import { InstrumentPicker } from "./InstrumentPicker";
 import Watchlist from "./Watchlist";
 import { prefillNote } from "./watchItem";
 import type { WatchlistItem } from "../api/watchlist";
-import { Row, RowsOrEmpty, Section, apiError, btnClass, cardClass, inputClass, locale, money, todayISO, CURRENCY_LIST } from "./ui";
+import { Row, RowsOrEmpty, Section, btnClass, cardClass, inputClass, CURRENCY_LIST } from "./ui";
+import { apiError } from "./apiError";
+import { locale, money } from "./money";
+import { todayISO } from "./calendarDays";
 import { dividendWord } from "./dividendLine";
 import { ageWords } from "./calendarDays";
 import { COST_WORDS, paidShare, plSplit, pricedPaid } from "./costWords";
@@ -315,7 +319,7 @@ export default function Portfolio({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void load(false);
+    queueMicrotask(() => void load(false));
   }, []);
 
   async function load(live: boolean) {
@@ -872,7 +876,7 @@ function LookThroughSection() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function load(refresh: boolean) {
+  const load = useCallback(async (refresh: boolean) => {
     setLoading(true);
     setError(null);
     try {
@@ -882,11 +886,11 @@ function LookThroughSection() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    void load(false);
-  }, []);
+    queueMicrotask(() => void load(false));
+  }, [load]);
 
   return (
     <Section

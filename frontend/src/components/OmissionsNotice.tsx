@@ -1,5 +1,5 @@
 import type { ArrivedPosition, OmittedPosition } from "../api/dashboard";
-import { locale, money } from "./ui";
+import { locale, money } from "./money";
 
 /* Value a situation did not account for, and what it declared instead.
 

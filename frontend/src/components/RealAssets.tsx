@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   createRealAsset,
   createValuation,
@@ -13,20 +13,9 @@ import {
   type RealAssetValuation,
 } from "../api/realAssets";
 import { getLiabilities, type Liability } from "../api/liabilities";
-import {
-  Breadcrumb,
-  Row,
-  RowsOrEmpty,
-  Section,
-  apiError,
-  btnClass,
-  inputClass,
-  money,
-  type Crumb,
-  CURRENCY_LIST,
-} from "./ui";
-import { CancelButton } from "./ui";
-import { sameCurrency, withinCurrency } from "./money";
+import { Breadcrumb, Row, RowsOrEmpty, Section, btnClass, inputClass, CancelButton, type Crumb, CURRENCY_LIST } from "./ui";
+import { apiError } from "./apiError";
+import { money, sameCurrency, withinCurrency } from "./money";
 import { getBaseCurrency } from "../api/baseCurrency";
 import { DatedAmountEditor } from "./DatedAmountEditor";
 import { useReopened } from "./reopen";
@@ -83,11 +72,7 @@ function AssetsLevel({ onSelect }: { onSelect: (a: RealAsset) => void }) {
   const currency = currencyChoice ?? base;
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -99,7 +84,11 @@ function AssetsLevel({ onSelect }: { onSelect: (a: RealAsset) => void }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   function reset() {
     setEditId(null);
@@ -183,11 +172,7 @@ function ValuationsLevel({ asset }: { asset: RealAsset }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void load();
-  }, [asset.id]);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -202,7 +187,11 @@ function ValuationsLevel({ asset }: { asset: RealAsset }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [asset.id]);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   // Equity = latest valuation − outstanding debt financing this asset, and
   // only when both are in the same currency. These are the figures as typed,

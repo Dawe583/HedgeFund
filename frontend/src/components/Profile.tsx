@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import {
   getSurvey,
   getSurveyQuestions,
@@ -16,7 +16,8 @@ import { getBaseCurrency, saveBaseCurrency, type BaseCurrencySetting } from "../
 import { choicesOf, isVisible, topicsOf, unshownAnswer } from "./questionnaire";
 import { askedAs, othersOf, toSave } from "./profileAnswers";
 import { choiceClass } from "./choice";
-import { apiError, btnClass, cardClass, inputClass } from "./ui";
+import { btnClass, cardClass, inputClass } from "./ui";
+import { apiError } from "./apiError";
 
 /* The questions are the backend's (`GET /api/survey/questions`, app/questionnaire.py):
    the chat's answers to them are checked against the same list, so the two
@@ -62,11 +63,7 @@ export default function Profile() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -93,7 +90,11 @@ export default function Profile() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   function setAnswer(key: string, value: string) {
     setAnswers((a) => ({ ...a, [key]: value }));

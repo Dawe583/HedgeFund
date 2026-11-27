@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   deleteWatchlistItem,
   getWatchlist,
   type WatchlistItem,
 } from "../api/watchlist";
-import { RowsOrEmpty, Section, apiError, locale } from "./ui";
+import { RowsOrEmpty, Section } from "./ui";
+import { apiError } from "./apiError";
+import { locale } from "./money";
 import { identityOf, sizedAs } from "./watchItem";
 
 /* The ideas the chat put in front of you, and what each one rested on.
@@ -114,11 +116,7 @@ export default function Watchlist({ onBuy }: { onBuy: (item: WatchlistItem) => v
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -128,7 +126,11 @@ export default function Watchlist({ onBuy }: { onBuy: (item: WatchlistItem) => v
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   async function drop(id: number) {
     try {

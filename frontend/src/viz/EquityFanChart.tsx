@@ -25,9 +25,8 @@ function cssToken(name: string, fallback: string): string {
 }
 
 /** The fan is drawable when the bands and steps agree in length and there
-    are at least two steps — one step is a point, not a path. Pure and
-    exported for the test. */
-export function fanDrawable(fan: TradingEquityFan): boolean {
+    are at least two steps — one step is a point, not a path. */
+function fanDrawable(fan: TradingEquityFan): boolean {
   const n = fan.steps.length;
   return (
     n >= 2 &&

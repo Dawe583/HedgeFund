@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   createBalance,
   createLiability,
@@ -13,19 +13,9 @@ import {
   type LiabilityBalance,
 } from "../api/liabilities";
 import { getRealAssets, type RealAsset } from "../api/realAssets";
-import {
-  Breadcrumb,
-  Row,
-  RowsOrEmpty,
-  Section,
-  apiError,
-  btnClass,
-  inputClass,
-  money,
-  type Crumb,
-  CURRENCY_LIST,
-} from "./ui";
-import { CancelButton } from "./ui";
+import { Breadcrumb, Row, RowsOrEmpty, Section, btnClass, inputClass, CancelButton, type Crumb, CURRENCY_LIST } from "./ui";
+import { apiError } from "./apiError";
+import { money } from "./money";
 import { getBaseCurrency } from "../api/baseCurrency";
 import { DatedAmountEditor } from "./DatedAmountEditor";
 import { useReopened } from "./reopen";
@@ -91,11 +81,7 @@ function DebtsLevel({ onSelect }: { onSelect: (l: Liability) => void }) {
   const currency = currencyChoice ?? base;
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -108,7 +94,11 @@ function DebtsLevel({ onSelect }: { onSelect: (l: Liability) => void }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   function reset() {
     setEditId(null);
@@ -233,11 +223,7 @@ function BalancesLevel({ liability }: { liability: Liability }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void load();
-  }, [liability.id]);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -247,7 +233,11 @@ function BalancesLevel({ liability }: { liability: Liability }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [liability.id]);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   return (
     <Section

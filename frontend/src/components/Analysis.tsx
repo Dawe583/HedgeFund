@@ -8,7 +8,10 @@ import {
   type ChainRunSummary,
   type ChainStep,
 } from "../api/chain";
-import { RowsOrEmpty, Spinner, apiError, cardClass, locale, mdComponents } from "./ui";
+import { RowsOrEmpty, Spinner, cardClass } from "./ui";
+import { apiError } from "./apiError";
+import { mdComponents } from "./mdComponents";
+import { locale } from "./money";
 
 /* The analyses, read at the width prose is read at.
 
@@ -234,9 +237,16 @@ function OneRun({
   const [run, setRun] = useState<ChainRun | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // A new run means the old run's page is gone: the state clears during
+  // render, before the effect fires — the fetch then fills it.
+  const [shownRunId, setShownRunId] = useState(runId);
+  if (shownRunId !== runId) {
+    setShownRunId(runId);
     setRun(null);
     setError(null);
+  }
+
+  useEffect(() => {
     getChainRun(runId)
       .then(setRun)
       .catch((e) => setError(apiError(e, "That analysis could not be loaded.")));

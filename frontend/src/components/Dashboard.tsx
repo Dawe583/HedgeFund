@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Area,
   AreaChart,
@@ -23,8 +23,10 @@ import { IN_FORCE, notCounted, undatedLine } from "./inForce";
 import { OmissionsNotice } from "./OmissionsNotice";
 import { UnconvertedNotice } from "./UnconvertedNotice";
 import FundOverview from "./FundOverview";
-import { Explainer, SAVINGS_RATE, StatCard, apiError, cardClass, locale, money, statLabelClass } from "./ui";
-import type { Money } from "./money";
+import { Explainer, StatCard, cardClass, statLabelClass } from "./ui";
+import { apiError } from "./apiError";
+import { SAVINGS_RATE } from "./savingsRate";
+import { locale, money, type Money } from "./money";
 
 /* Chart decisions (see the project's dataviz rules):
    - Net worth over time is ONE series: the headline metric. The components
@@ -271,11 +273,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -294,7 +292,11 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   if (loading) return <p className="text-ink-soft">Loading…</p>;
   if (error) return <p className="text-down">{error}</p>;

@@ -9,16 +9,9 @@ import {
   type RequiredReturnResult,
 } from "../api/goals";
 import { getBaseCurrency } from "../api/baseCurrency";
-import {
-  Row,
-  RowsOrEmpty,
-  Section,
-  apiError,
-  btnClass,
-  inputClass,
-  money,
-  CURRENCY_LIST,
-} from "./ui";
+import { Row, RowsOrEmpty, Section, btnClass, inputClass, CURRENCY_LIST } from "./ui";
+import { apiError } from "./apiError";
+import { money } from "./money";
 import { goal, marks, refusal } from "./required";
 
 const GOAL_TYPES: { value: string; label: string }[] = [
@@ -74,11 +67,17 @@ export default function Goals() {
     }
   }
 
+  // The required return stands only while the goal names an amount and a day;
+  // when it stops doing so, the figure clears in render, not in the effect.
+  const rrAskable = type === "target_amount" && !!targetAmount && !!targetDate;
+  const [rrWasAskable, setRrWasAskable] = useState(rrAskable);
+  if (rrWasAskable !== rrAskable) {
+    setRrWasAskable(rrAskable);
+    if (!rrAskable) setRr(null);
+  }
+
   useEffect(() => {
-    if (type !== "target_amount" || !targetAmount || !targetDate) {
-      setRr(null);
-      return;
-    }
+    if (!rrAskable) return;
     let cancelled = false;
     computeRequiredReturn({
       current_amount: Number(currentAmount) || 0,
@@ -91,7 +90,7 @@ export default function Goals() {
     return () => {
       cancelled = true;
     };
-  }, [type, targetAmount, targetDate, currentAmount, monthly]);
+  }, [type, targetAmount, targetDate, currentAmount, monthly, rrAskable]);
 
   const isTarget = type === "target_amount";
 

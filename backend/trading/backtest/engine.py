@@ -280,6 +280,7 @@ def walk_forward(
     n_folds: int = 4,
     cfg: BTConfig | None = None,
     timeframe: str = "1h",
+    runner=None,
 ) -> list[dict]:
     """Sequential OOS evaluation: fold k is tested strictly after fold k-1.
 
@@ -300,7 +301,10 @@ def walk_forward(
         test_end = size * (k + 2)
         warmup = min(500, test_start)  # never negative, honestly recorded
         window = df.iloc[test_start - warmup : test_end]
-        res = run_backtest(window, strategy_factory(), cfg, timeframe)
+        # runner is the fill truth the caller chose (kernel, since the
+        # unification 2026-11-27); defaulting to run_backtest keeps the
+        # reference arithmetic importable for the diff, never for evidence
+        res = (runner or run_backtest)(window, strategy_factory(), cfg, timeframe)
         metrics = _fold_test_metrics(res.trades, res.equity, df.index[test_start], bars_per_year)
         folds.append(
             {

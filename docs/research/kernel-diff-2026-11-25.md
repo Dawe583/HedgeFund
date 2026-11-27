@@ -145,3 +145,23 @@ need erasing: the wall-clock cadence (hours per bar against milliseconds of
 chain latency) is the same quiescence property with a margin of ~10^6, and
 the residual live-only semantics (a fill at the market state when the chain
 clears, not at close(k) exactly) is real-venue truth, not an artifact.
+
+---
+
+## Addendum, 2026-11-27 — the divergence is retired, not measured forever
+
+The measurement above was a reconciliation; the unification is the end of
+it. As of today the ported `run_backtest` has NO production caller left:
+the API's interactive backtest and its walk-forward folds run through
+`run_kernel_backtest`, so what the UI shows is what validation measured —
+close-of-bar fills everywhere, one execution truth, zero rows that need
+divergence budgets against themselves. The ported engine survives in the
+tree as the reconstruction arithmetic's reference (its `_metrics` and the
+fold re-basing helpers are shared code) and as the diff's original
+exhibit; a future cleanup may delete it, and deleting it is safe the day
+nothing imports it — grep, not memory, decides that day. Paper fills were
+already backtest-aligned in their protective logic and now share the cost
+curve as well (trading/costs.py), so the three planes measure one fill
+economics: kernel everywhere it matters, documented divergences retired
+into history, which is where this document stays — as evidence, unedited
+above this line.

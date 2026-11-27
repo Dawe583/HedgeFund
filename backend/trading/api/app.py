@@ -12,7 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from trading.backtest.engine import BTConfig, run_backtest, walk_forward
+from trading.backtest.engine import BTConfig, walk_forward
+from trading.kernel import run_kernel_backtest
 from trading.config import get_settings
 from trading.features import build_features, candles_to_df
 from trading.models import (
@@ -167,12 +168,18 @@ async def run_bt(req: BacktestRequest):
 
     cfg = BTConfig()
     if req.folds and req.folds > 1:
-        folds = walk_forward(feats, strat_cls, n_folds=req.folds, cfg=cfg, timeframe=req.timeframe)
+        folds = walk_forward(
+            feats, strat_cls, n_folds=req.folds, cfg=cfg, timeframe=req.timeframe,
+            runner=lambda window, strat, c, tf: run_kernel_backtest(window, strat, c, tf),
+        )
         result = None
         metrics = aggregate_folds(folds)
         payload = {"mode": "walk_forward", "folds": folds, "metrics": metrics}
     else:
-        result = run_backtest(feats, strat_cls(), cfg, req.timeframe)
+        # the kernel IS the fill truth since the unification (2026-11-27):
+        # what the API shows is what validation measured — close-of-bar fills
+        # in both, never the ported engine's open(i+1) idealization no venue offers
+        result = run_kernel_backtest(feats, strat_cls(), cfg, req.timeframe)
         payload = {"mode": "single", "metrics": result.metrics}
 
     session = session_factory()

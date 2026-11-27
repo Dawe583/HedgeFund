@@ -225,7 +225,7 @@ def build() -> None:
             cls = "warn"
             verdict_txt = "VOID*"
         else:
-            cls = "alive" if r["verdict"] == "validated" else "dead"
+            cls = "alive" if r["verdict"] == "validated" else ("dim" if r["verdict"] in ("untestable", "error") else "dead")
             verdict_txt = r["verdict"]
         sharpe = f"{r['sharpe']:+.2f}" if r["sharpe"] is not None else "—"
         p = f"{r['permutation_p']:.2f}" if r["permutation_p"] is not None else "—"

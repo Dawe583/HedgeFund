@@ -1004,6 +1004,28 @@ def _make_strategy_class():
                 if cached is not None and cached.is_open:
                     self._cancel_resting(cached)
 
+        def _bar_slip_bps(self, ts_event_ns: int) -> float:
+            """Slippage fraction for a fill stamped at ts_event, from the
+            cost curve over the bar that filled it. Falls back to the flat
+            floor when the bar cannot be resolved — a cost model degrades
+            to the assumption it replaces, never invents precision."""
+            from trading.costs import bar_slippage_bps
+            flat = self._cfg.slippage_bps / 10_000
+            try:
+                df = self._frame_source.frame()
+                if df is None or not len(df):
+                    return flat
+                spec_to_tf = {v: k for k, v in TIMEFRAME_BAR_SPEC.items()}
+                open_ns = ts_event_ns - TIMEFRAME_NS[spec_to_tf[self.config.bar_spec]]
+                idx_ns = df.index.asi8 * _UNIT_TO_NS[df.index.unit]
+                hits = (idx_ns == open_ns).nonzero()[0]
+                if not len(hits):
+                    return flat
+                row = df.iloc[int(hits[0])]
+                return bar_slippage_bps(row["high"], row["low"], row["close"], self._cfg.slippage_bps) / 10_000
+            except Exception:  # a cost lookup never kills a settle — the flat floor is the honest fallback
+                return flat
+
         def _settle(self, pos: dict):
             """Net realized pnl in the ported arithmetic, credited to the
             run's validation equity the moment the close fills — later sizing
@@ -1011,13 +1033,18 @@ def _make_strategy_class():
             would have seen."""
             cfg = self._cfg
             fee = cfg.fee_pct / 100
-            slip = cfg.slippage_bps / 10_000
             side = pos["side"]
             entry_raw = pos["entry_fill"]["price"]
             exit_raw = pos["exit_fill"]["price"]
             qty = pos["qty"]
-            entry_px = entry_raw * (1 + slip) if side == "long" else entry_raw * (1 - slip)
-            exit_px = exit_raw * (1 - slip) if side == "long" else exit_raw * (1 + slip)
+            # cost curve v1 (trading/costs.py): the fill's own bar decides
+            # what the fill cost — a panic exit in a wide bar pays what a
+            # panic costs, a quiet entry pays the floor. Flat slippage was
+            # never a measurement, it was an average nobody verified.
+            entry_slip = self._bar_slip_bps(pos["entry_fill"]["ts_event"])
+            exit_slip = self._bar_slip_bps(pos["exit_fill"]["ts_event"])
+            entry_px = entry_raw * (1 + entry_slip) if side == "long" else entry_raw * (1 - entry_slip)
+            exit_px = exit_raw * (1 - exit_slip) if side == "long" else exit_raw * (1 + exit_slip)
             gross = (exit_px - entry_px) * qty * (1 if side == "long" else -1)
             fees = (entry_px + exit_px) * qty * fee
             pnl = gross - fees

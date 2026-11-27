@@ -128,7 +128,8 @@ def run_backtest(
     n = len(df)
 
     fee = cfg.fee_pct / 100
-    slip = cfg.slippage_bps / 10_000
+    # slippage is per-bar now (trading/costs.py — cost curve v1): a flat rate
+    # never was a measurement, it was an unverified average.
 
     equity = float(cfg.initial_equity)
     eq_curve = []
@@ -141,7 +142,11 @@ def run_backtest(
 
     def _close(price: float, ts_i: int, reason: str):
         nonlocal equity, pos_side, entry_px, qty, stop, tp, entry_i, conf
-        exit_fill = price * (1 - slip) if pos_side == "long" else price * (1 + slip)
+        from trading.costs import bar_slippage_bps
+        # cost curve v1: the exit bar decides what the exit cost — a panic
+        # bar pays what a panic costs. The entry's cost was priced at entry.
+        slip_x = bar_slippage_bps(h[ts_i], l[ts_i], c[ts_i], cfg.slippage_bps) / 10_000
+        exit_fill = price * (1 - slip_x) if pos_side == "long" else price * (1 + slip_x)
         gross = (exit_fill - entry_px) * qty * (1 if pos_side == "long" else -1)
         fees = (entry_px + exit_fill) * qty * fee
         pnl = gross - fees
@@ -200,7 +205,9 @@ def run_backtest(
             if equity <= 0 or notional > equity * cfg.max_symbol_exposure or notional > equity * cfg.max_gross_exposure:
                 pass  # exposure-cap veto — caps are hard, never a resize
             else:
-                fill = o[i] * (1 + slip) if sig.side == "long" else o[i] * (1 - slip)
+                from trading.costs import bar_slippage_bps
+                slip_e = bar_slippage_bps(h[i], l[i], c[i], cfg.slippage_bps) / 10_000
+                fill = o[i] * (1 + slip_e) if sig.side == "long" else o[i] * (1 - slip_e)
                 pos_side = sig.side
                 entry_px = fill
                 qty = qty_local

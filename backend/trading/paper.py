@@ -349,7 +349,10 @@ class PaperEngine:
         long TP: candle high reached it -> fill at TP plus slippage. Mirrored
         for shorts. Keeps paper fills honest vs the backtest engine.
         """
-        slip = self.s.slippage_bps / 10_000
+        # cost curve v1: the filling candle's own width prices the fill —
+        # gap-through exits land in exactly the bars where flat slippage lied most
+        from trading.costs import bar_slippage_bps
+        slip = bar_slippage_bps(candle["high"], candle["low"], candle["close"], self.s.slippage_bps) / 10_000
         if hit_sl:
             if side == "long":
                 gap_fill = min(candle["open"], stop)
@@ -699,7 +702,12 @@ class PaperEngine:
             log.info("gross exposure cap hit (+%.2f new) — %s skipped", notional, bot)
             return
         qty = notional / price
-        slip = self.s.slippage_bps / 10_000
+        from trading.costs import bar_slippage_bps
+        # the entry fills on the signal candle's close — that candle's own
+        # width prices the cost (cost curve v1); the feats frame IS the tape
+        slip = bar_slippage_bps(
+            float(feats["high"].iloc[-1]), float(feats["low"].iloc[-1]), close, self.s.slippage_bps
+        ) / 10_000
         fill = price * (1 + slip) if sig_adj.side == "long" else price * (1 - slip)
         sl = fill - stop_dist if sig_adj.side == "long" else fill + stop_dist
         tp = (

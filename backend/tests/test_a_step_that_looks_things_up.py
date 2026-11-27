@@ -298,7 +298,12 @@ def test_a_steps_searches_are_capped_and_counted_in_its_cost(client, registry, o
         assert run.steps[0].cost == pytest.approx(0.02 + 0.04 + 3 * 0.0073)
     searched = _of(openrouter, "search")
     assert len(searched) == chain.SEARCHES_PER_STEP == 3
-    assert [body["messages"][-1]["content"] for body in searched] == [
+    # the three searches run in a thread pool (chain._looked_up): the fake
+    # records them in completion order, which no scheduling discipline
+    # guarantees matches submission order. What the step owns is the SET of
+    # queries it asked — asserting an order here measured the thread
+    # scheduler, not the chain.
+    assert sorted(body["messages"][-1]["content"] for body in searched) == [
         "example index methodology 0", "example index methodology 1", "example index methodology 2"]
     results = [json.loads(m["content"]) for m in _of(openrouter, "analyst")[1]["messages"] if m["role"] == "tool"]
     assert [r["ok"] for r in results] == [True, True, True, False]

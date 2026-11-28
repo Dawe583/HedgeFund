@@ -18,3 +18,13 @@ __all__ = [
     "run_validation",
     "walk_forward_analysis",
 ]
+
+
+def __getattr__(name):
+    # synthetic_path_mc is importable from the package but loaded lazily:
+    # it pulls the kernel in transitively, and validation/__init__ is on the
+    # import path of code that must stay kernel-free (the ledger writer).
+    if name in ("synthetic_path_mc", "make_synthetic_ohlcv", "stationary_bootstrap_indices"):
+        from trading.validation import synthetic_paths
+        return getattr(synthetic_paths, name)
+    raise AttributeError(name)

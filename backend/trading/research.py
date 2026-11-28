@@ -602,6 +602,42 @@ def validate_core(
         except Exception as exc:  # confirmation failure never voids a validation
             validation_payload["entries_null"] = {"error": str(exc)}
 
+    # Synthetic-path generalization tier (owner request 2026-11-28): the same
+    # survivors-only discipline as entries-null — every prior tier replays the
+    # SAME tape, this one pays the kernel for price paths that did not happen.
+    # Compute honesty: one simulation is one full backtest, so the survivor
+    # tier runs n_simulations=16 (a floor for a distribution shape, not a
+    # measurement) and the CLI post-hoc path owns deep ensembles. A failure
+    # here never voids a validation — the tier reports, the verdict stands on
+    # the same-tape gates as before.
+    if verdict == "validated" and df is not None:
+        try:
+            from trading.validation.synthetic_paths import synthetic_path_mc
+
+            strat_params = getattr(strategy, "__dict__", {})
+            strat_cls = type(strategy)
+
+            def _fresh():
+                try:
+                    return strat_cls(**{k: v for k, v in strat_params.items()
+                                        if not k.startswith("_") and isinstance(v, (int, float, str, bool))})
+                except TypeError:
+                    return strat_cls()
+
+            observed = float(result.metrics.get("sharpe", 0.0))
+            gen = synthetic_path_mc(
+                df, _fresh, cfg, timeframe,
+                n_simulations=16, seed=seed, observed_sharpe=observed,
+            )
+            validation_payload["synthetic_mc"] = gen
+            p_gen = gen.get("p_value_generalization")
+            if p_gen is not None:
+                reasons = list(reasons) + [
+                    f"synthetic-path generalization: p {p_gen} over {gen.get('n_simulations')} unseen price paths (mean {gen.get('synth_mean')})"
+                ]
+        except Exception as exc:  # same non-voiding discipline as entries-null
+            validation_payload["synthetic_mc"] = {"error": str(exc)}
+
     return {
         "verdict": verdict,
         "result": result,
